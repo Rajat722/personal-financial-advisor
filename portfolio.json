@@ -1,0 +1,6 @@
+{
+    "tickers": ["MSFT", "TSLA", "GOOGL"],
+    "sectors": ["cloud computing", "AI", "semiconductors", "large-cap tech"],
+    "indices": ["S&P 500", "Nasdaq"]
+}
+  
