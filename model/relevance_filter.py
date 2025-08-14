@@ -2,8 +2,8 @@
 
 import uuid
 import json
-from vector_store import get_context_collection, find_similar_in_portfolio, add_article_to_collection
-from embedder import embed_text
+from storage.vector_store import get_context_collection, find_similar_in_portfolio, add_article_to_collection
+from model.embedder import embed_text
 
 SIMILARITY_THRESHOLD = 0.75
 

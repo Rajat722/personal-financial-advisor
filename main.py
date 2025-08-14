@@ -1,17 +1,17 @@
 # main.py
-import dashboard as st
+import UI.dashboard as st
 import json
 import uuid
 from datetime import datetime
 import os
 
-from embedder import embed_text
-from vector_store import (
+from model.embedder import embed_text
+from storage.vector_store import (
     add_article_to_collection,
     find_similar_in_portfolio
 )
-from extract_text_from_article import extract_article_text 
-from model import summarize_article
+from news.extract_text_from_article import extract_article_text 
+from model.model import summarize_article
 
 # Threshold above which we consider a match to be relevant
 SIMILARITY_THRESHOLD = 0.75

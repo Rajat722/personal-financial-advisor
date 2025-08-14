@@ -5,16 +5,16 @@ import streamlit as st
 import uuid
 from datetime import datetime
 
-from embedder import embed_text
-from vector_store import (
+from model.embedder import embed_text
+from storage.vector_store import (
     add_article_to_collection,
     find_similar_in_portfolio,
     get_portfolio_collection,
     get_article_collection
 )
-from extract_text_from_article import extract_article_text, extract_json_block
-from model import summarize_article
-from filter import SIMILARITY_THRESHOLD
+from news.extract_text_from_article import extract_article_text, extract_json_block
+from model.model import summarize_article
+from model.filter import SIMILARITY_THRESHOLD
 
 
 st.set_page_config(page_title="AI News Relevance Checker", layout="wide")

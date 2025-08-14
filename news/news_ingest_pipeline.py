@@ -1,12 +1,15 @@
 # news_ingest_pipeline.py
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import uuid
 from datetime import datetime
 from newspaper import Article
 
-from news_fetcher import fetch_finance_news
-from embedder import embed_text
-from vector_store import add_article_to_collection
+from newsdata import fetch_finance_news_from_newsdataio
+from model.embedder import embed_text
+from storage.vector_store import add_article_to_collection
 
 # --- Extract full article content from a URL ---
 def extract_article_text(url):
@@ -22,7 +25,7 @@ def extract_article_text(url):
 # --- Main ingestion pipeline ---
 def ingest_daily_news():
     print("Fetching news metadata from NewsData.io...")
-    articles = fetch_finance_news()
+    articles = fetch_finance_news_from_newsdataio(q="TSLA")
     print(f"Fetched {len(articles)} articles.")
 
     for entry in articles:

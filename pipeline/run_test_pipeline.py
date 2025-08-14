@@ -3,9 +3,9 @@
 import json
 import os
 from datetime import datetime
-from relevance_filter import find_relevant_articles_from_context, index_portfolio_terms
-from stock_details import get_stock_OHLCV_data, format_summary_json, format_time_series_table
-from model import summarize_multiple_articles, get_insights_from_news_and_prices, get_end_of_day_summary
+from model.relevance_filter import find_relevant_articles_from_context, index_portfolio_terms
+from random.stock_details import get_stock_OHLCV_data, format_summary_json, format_time_series_table
+from model.model import summarize_multiple_articles, get_insights_from_news_and_prices, get_end_of_day_summary
 
 # === Logging setup ===
 LOG_DIR = "logs"
@@ -83,7 +83,7 @@ except Exception as e:
     print(f"❌ Failed to generate EOD summary: {e}")
 
 # === Optional: Save relevant article metadata to DB ===
-from vector_store import add_article_to_collection
+from storage.vector_store import add_article_to_collection
 for article in relevant_articles:
     embedding = article.get("embedding")
     try:
