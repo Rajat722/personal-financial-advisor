@@ -2,30 +2,36 @@
 
 import uuid
 import json
-from storage.vector_store import get_context_collection, find_similar_in_portfolio, add_article_to_collection
-from model.embedder import embed_text
+from storage.vector_store import get_context_collection, find_similar_in_portfolio, add_to_collection
+from model.embedder import embed_text, GeminiEmbedder
 
 SIMILARITY_THRESHOLD = 0.75
+
+embedder = GeminiEmbedder()
 
 # --- Load and index portfolio terms from JSON ---
 def index_portfolio_terms(path="D:\\Dev\\pfa-backend-fastapi\\portfolio2.json"):
     with open(path, "r") as f:
         data = json.load(f)
 
-    equities = data.get("equities", [])
     terms = []
+    equities = data.get("equities", [])
+    sectors = [sector.lower() for sector in data.get("sectors", [])]
+    indices = data.get("indices", [])
+    terms.extend(sectors, indices)
 
     for item in equities:
-        ticker = item.get("ticker")
+        ticker = item.get("ticker").upper()
         company = item.get("company")
+        
         if ticker:
             terms.append(ticker)
         if company:
             terms.append(company)
 
     for term in terms:
-        embedding = embed_text(term)
-        add_article_to_collection("portfolio", f"portfolio-{term}", term, embedding, {"type": "portfolio_term"})
+        embedding = embedder.embed_text(term)
+        add_to_collection("portfolio", f"portfolio-{term}", term, embedding, {"type": "portfolio_term"})
 
 # --- Retrieve relevant articles from context DB based on portfolio embedding match ---
 def find_relevant_articles_from_context():
