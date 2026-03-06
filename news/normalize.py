@@ -1,9 +1,10 @@
-from news.Article_model_classes import Article
+from news.article_model_classes import Article
 from hashlib import sha256
 from urllib.parse import urlparse
 from datetime import datetime, timezone
 
-def normalize_article(raw_response: dict, context_tickers: list[str], context_sectors: list[str]) -> Article | None :
+def normalize_article(raw_response: dict, context_tickers: list[str], context_sectors: list[str]) -> "Article | None":
+    """Normalize a raw NewsData.io article dict into an Article dataclass with a deterministic SHA256 ID."""
     url = raw_response["link"]
     title = raw_response["title"].strip()
     domain = urlparse(url).netloc.lower()

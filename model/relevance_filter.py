@@ -1,71 +1,187 @@
 # relevance_filter.py
 
-import uuid
 import json
-from storage.vector_store import get_context_collection, find_similar_in_portfolio, add_to_collection
-from model.embedder import embed_text, GeminiEmbedder
+from pathlib import Path
 
-SIMILARITY_THRESHOLD = 0.75
+from storage.vector_store import get_article_collection, find_similar_in_portfolio, add_to_collection
+from model.embedder import GeminiEmbedder
+from core.config import settings
+from core.logging import get_logger
+
+log = get_logger("relevance_filter")
+
+# Configurable via SIMILARITY_THRESHOLD env var (defaults to settings.SIM_THRESHOLD = 0.75)
+SIMILARITY_THRESHOLD: float = settings.SIM_THRESHOLD
 
 embedder = GeminiEmbedder()
 
+# ---------------------------------------------------------------------------
+# Rich description lookup for portfolio terms
+# Short bare terms ("AI", "T", "AAPL") embed poorly — use full descriptions
+# ---------------------------------------------------------------------------
+_TICKER_DESCRIPTIONS: dict[str, str] = {
+    "AAPL": "AAPL Apple Inc technology company iPhone Mac iPad App Store services consumer electronics",
+    "MSFT": "MSFT Microsoft technology cloud Azure Office Windows enterprise software AI Copilot",
+    "NVDA": "NVDA Nvidia GPU graphics semiconductor AI chips data center machine learning",
+    "AMZN": "AMZN Amazon e-commerce cloud AWS marketplace logistics retail advertising",
+    "GOOG": "GOOG Alphabet Google search advertising YouTube cloud AI Gemini Android",
+    "TSLA": "TSLA Tesla electric vehicle EV battery autonomous driving energy storage",
+    "META": "META Meta Platforms Facebook Instagram WhatsApp social media advertising VR",
+    "BRK-A": "BRK-A Berkshire Hathaway Warren Buffett holding company insurance diversified investment",
+    "JPM": "JPM JPMorgan Chase bank financial services investment banking retail lending",
+    "COST": "COST Costco wholesale retail membership warehouse consumer staples",
+    "CRWD": "CRWD CrowdStrike cybersecurity endpoint protection cloud security threat intelligence",
+    "SHOP": "SHOP Shopify e-commerce platform merchant payments online retail software",
+    "DKNG": "DKNG DraftKings sports betting online gambling fantasy sports gaming",
+    "NET": "NET Cloudflare network security CDN cloud services DDoS protection zero trust",
+    "RKLB": "RKLB Rocket Lab aerospace small satellite launch vehicle space defense",
+    "CELH": "CELH Celsius Holdings energy drinks beverage consumer health fitness",
+    "AXON": "AXON Axon Enterprise law enforcement Taser body camera public safety",
+    "JNJ": "JNJ Johnson Johnson healthcare pharmaceutical medical devices consumer health",
+    "PG": "PG Procter Gamble consumer goods household products personal care brands",
+    "KO": "KO Coca-Cola beverages soft drinks consumer staples brand global",
+    "VZ": "VZ Verizon telecommunications wireless 5G broadband internet phone carrier",
+    "O": "O Realty Income REIT real estate investment trust retail properties monthly dividend",
+    "T": "T AT&T telecommunications wireless 5G broadband TV DirecTV phone carrier",
+    "SPY": "SPY SPDR S&P 500 ETF index fund large-cap US equities market benchmark",
+    "QQQ": "QQQ Invesco Nasdaq-100 ETF technology index fund growth stocks",
+}
+
+_SECTOR_DESCRIPTIONS: dict[str, str] = {
+    "cloud computing": "cloud computing SaaS PaaS IaaS AWS Azure Google Cloud infrastructure software services",
+    "ai": "artificial intelligence machine learning neural networks generative AI LLM deep learning GPT",
+    "semiconductors": "semiconductor chip manufacturing NVIDIA AMD Intel TSMC GPU CPU wafer fab integrated circuit",
+    "large-cap tech": "large-cap technology stocks mega-cap FAANG growth equities tech sector",
+    "pharmaceuticals": "pharmaceutical biotech drug development FDA clinical trials medicine healthcare",
+}
+
+_INDEX_DESCRIPTIONS: dict[str, str] = {
+    "s&p 500": "S&P 500 US stock market large-cap equities benchmark index SPY performance",
+    "nasdaq": "Nasdaq technology stock exchange growth companies QQQ composite index",
+    "russell 2000": "Russell 2000 small-cap US equities index IWM diversified",
+}
+
+
+def _enrich_term(term: str, term_type: str) -> str:
+    """Return a rich description for a portfolio term, falling back to the raw term."""
+    key = term.lower()
+    if term_type == "ticker":
+        return _TICKER_DESCRIPTIONS.get(term.upper(), term)
+    if term_type == "sector":
+        return _SECTOR_DESCRIPTIONS.get(key, term)
+    if term_type == "index":
+        return _INDEX_DESCRIPTIONS.get(key, term)
+    return term
+
+
 # --- Load and index portfolio terms from JSON ---
-def index_portfolio_terms(path="D:\\Dev\\pfa-backend-fastapi\\portfolio2.json"):
+def index_portfolio_terms(path: str | None = None) -> None:
+    """Load portfolio JSON and upsert enriched descriptions for all tickers, sectors, and indices."""
+    if path is None:
+        path = Path(__file__).resolve().parent.parent / "user_portfolio" / "portfolio.json"
     with open(path, "r") as f:
         data = json.load(f)
 
-    terms = []
     equities = data.get("equities", [])
-    sectors = [sector.lower() for sector in data.get("sectors", [])]
+    sectors = [s.lower() for s in data.get("sectors", [])]
     indices = data.get("indices", [])
-    terms.extend(sectors, indices)
 
+    # Index sectors
+    for sector in sectors:
+        rich_text = _enrich_term(sector, "sector")
+        embedding = embedder.embed_text(rich_text)
+        add_to_collection("portfolio", f"portfolio-{sector}", sector, embedding, {"type": "portfolio_term"})
+
+    # Index indices
+    for idx in indices:
+        rich_text = _enrich_term(idx, "index")
+        embedding = embedder.embed_text(rich_text)
+        add_to_collection("portfolio", f"portfolio-{idx}", idx, embedding, {"type": "portfolio_term"})
+
+    # Index equities: ticker and company name as separate entries
     for item in equities:
-        ticker = item.get("ticker").upper()
-        company = item.get("company")
-        
+        ticker = item.get("ticker", "").upper()
+        company = item.get("company", "")
+
         if ticker:
-            terms.append(ticker)
+            rich_ticker = _enrich_term(ticker, "ticker")
+            embedding = embedder.embed_text(rich_ticker)
+            add_to_collection("portfolio", f"portfolio-{ticker}", ticker, embedding, {"type": "portfolio_term"})
+
         if company:
-            terms.append(company)
+            # Company name as a separate entry using the ticker description as context
+            rich_company = _TICKER_DESCRIPTIONS.get(ticker, company)
+            embedding = embedder.embed_text(rich_company)
+            add_to_collection("portfolio", f"portfolio-company-{ticker}", company, embedding, {"type": "portfolio_term"})
 
-    for term in terms:
-        embedding = embedder.embed_text(term)
-        add_to_collection("portfolio", f"portfolio-{term}", term, embedding, {"type": "portfolio_term"})
 
-# --- Retrieve relevant articles from context DB based on portfolio embedding match ---
-def find_relevant_articles_from_context():
-    context_collection = get_context_collection()
-    
-    all_articles = context_collection.get(include=["documents", "embeddings", "metadatas"])
+# --- Retrieve relevant articles from the articles collection ---
+def find_relevant_articles_from_context() -> list:
+    """Return all articles whose embeddings match the portfolio above the similarity threshold.
+
+    Logs article title, best matching portfolio term, and similarity score for debugging.
+    """
+    article_collection = get_article_collection()
+    all_articles = article_collection.get(include=["documents", "embeddings", "metadatas"])
 
     relevant_articles = []
 
+    article_ids = all_articles.get("ids", [])
+    article_texts = all_articles.get("documents", [])
+    article_metadatas = all_articles.get("metadatas", [])
+    article_embeddings = all_articles.get("embeddings", [])
+
+    log.info(f"Scanning {len(article_ids)} articles against portfolio (threshold={SIMILARITY_THRESHOLD})")
+
     for doc_id, text, metadata, embedding in zip(
-    all_articles["ids"],
-    all_articles["documents"],
-    all_articles["metadatas"],
-    all_articles["embeddings"]
+        article_ids, article_texts, article_metadatas, article_embeddings
     ):
+        if embedding is None:
+            log.warning(f"Skipping {doc_id} — embedding is None")
+            continue
+
         try:
             results = find_similar_in_portfolio(embedding, top_k=3)
-            scores = results.get("distances", [[]])[0]
+            distances = results.get("distances", [[]])[0]
+            portfolio_docs = results.get("documents", [[]])[0]
 
-            if any(score >= SIMILARITY_THRESHOLD for score in scores):
+            if not distances:
+                continue
+
+            best_distance = min(distances)
+            best_similarity = 1.0 - best_distance
+            best_match = portfolio_docs[distances.index(best_distance)] if portfolio_docs else "unknown"
+            title = metadata.get("title", doc_id)
+
+            log.debug(
+                f"[{title[:60]}] best_match='{best_match}' similarity={best_similarity:.3f} "
+                f"({'PASS' if best_similarity >= SIMILARITY_THRESHOLD else 'FAIL'})"
+            )
+
+            # ChromaDB returns cosine distances (0=identical). Convert to similarity.
+            if best_similarity >= SIMILARITY_THRESHOLD:
                 relevant_articles.append({
                     "doc_id": doc_id,
                     "text": text,
                     "metadata": metadata,
-                    "scores": scores
+                    "scores": distances,
+                    "best_match": best_match,
+                    "best_similarity": best_similarity,
                 })
         except Exception as e:
-            print(f"Skipping {doc_id} due to error: {e}")
+            log.warning(f"Skipping {doc_id} due to error: {e}")
 
+    log.info(f"Found {len(relevant_articles)} relevant articles out of {len(article_ids)} total.")
     return relevant_articles
+
 
 # --- Example usage ---
 if __name__ == "__main__":
     matches = find_relevant_articles_from_context()
     print(f"\nFound {len(matches)} relevant articles:\n")
     for i, article in enumerate(matches):
-        print(f"[{i+1}] {article['metadata'].get('title')}\n{article['metadata'].get('url')}\n")
+        print(
+            f"[{i+1}] {article['metadata'].get('title')}\n"
+            f"    best_match={article['best_match']}  similarity={article['best_similarity']:.3f}\n"
+            f"    {article['metadata'].get('url')}\n"
+        )

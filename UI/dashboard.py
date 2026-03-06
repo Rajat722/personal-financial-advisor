@@ -14,7 +14,7 @@ from storage.vector_store import (
 )
 from news.extract_text_from_article import extract_article_text, extract_json_block
 from model.model import summarize_article
-from model.filter import SIMILARITY_THRESHOLD
+from model.relevance_filter import SIMILARITY_THRESHOLD
 
 
 st.set_page_config(page_title="AI News Relevance Checker", layout="wide")

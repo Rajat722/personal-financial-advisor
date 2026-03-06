@@ -1,11 +1,16 @@
 # run_pipeline.py
 
+import sys
 import json
 import os
+from pathlib import Path
+
+# Ensure project root is on sys.path when this file is run directly
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from datetime import datetime
 from core.logging import get_logger
 from model.relevance_filter import find_relevant_articles_from_context, index_portfolio_terms
-from random.stock_details import get_stock_OHLCV_data, format_summary_json, format_time_series_table
+from utils.stock_details import get_stock_OHLCV_data, format_summary_json, format_time_series_table
 from model.model import summarize_multiple_articles, get_insights_from_news_and_prices, get_end_of_day_summary
 
 # === Logging setup ===
@@ -13,7 +18,8 @@ logger = get_logger("logger")
 LOG_DIR = "logs"
 os.makedirs(LOG_DIR, exist_ok=True)
 
-def save_log(filename, content):
+def save_log(filename: str, content: dict) -> None:
+    """Write content as a timestamped JSON file to the logs directory."""
     timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H-%M-%S")
     path = os.path.join(LOG_DIR, f"{filename}_{timestamp}.json")
     with open(path, "w", encoding="utf-8") as f:
@@ -24,13 +30,12 @@ def save_log(filename, content):
 index_portfolio_terms() #-> works well
 
 # === Step 2: Find relevant articles ===
-# TODO -> need to test how well this works
-relevant_articles = find_relevant_articles_from_context() 
+relevant_articles = find_relevant_articles_from_context()
 logger.info(f"Found {len(relevant_articles)} relevant articles.\n")
 
 # === Step 3: Format articles into prompt blocks ===
-# TODO -> fix this ->JSON had \n after every key and value
-def format_article_blocks(articles):
+def format_article_blocks(articles: list) -> str:
+    """Format a list of article dicts into numbered text blocks for LLM prompts."""
     blocks = []
     for i, article in enumerate(articles):
         title = article['metadata'].get("title", f"Untitled Article {i+1}")
@@ -41,7 +46,8 @@ def format_article_blocks(articles):
 article_blocks = format_article_blocks(relevant_articles)
 
 # === Step 4: Extract tickers ===
-with open("D:\\Dev\\pfa-backend-fastapi\\portfolio2.json", "r") as f:
+ROOT = Path(__file__).resolve().parent.parent
+with open(ROOT / "user_portfolio" / "portfolio.json", "r") as f:
     portfolio = json.load(f)
 
 tickers = [item["ticker"] for item in portfolio["equities"]]
@@ -71,7 +77,7 @@ try:
     logger.info(summarized_articles_json)
     save_log("summarized_articles", {"response": summarized_articles_json})
 except Exception as e:
-    print(f"❌ Failed to summarize articles: {e}")
+    logger.info(f"❌ Failed to summarize articles: {e}")
     summarized_articles_json = "[]"
 
 # === Step 8: Generate EOD summary ===
@@ -84,17 +90,8 @@ try:
 except Exception as e:
     logger.info(f"❌ Failed to generate EOD summary: {e}")
 
-# === Optional: Save relevant article metadata to DB ===
-from storage.vector_store import add_article_to_collection
-for article in relevant_articles:
-    embedding = article.get("embedding")
-    try:
-        if embedding is not None:
-            add_article_to_collection("relevant", article["doc_id"], article["text"], embedding, article["metadata"])
-        else:
-            print(f"⚠️ Skipping {article['doc_id']} due to missing embedding.")    
-    except Exception as e:
-        logger.info(f"⚠️ Failed to save article {article['doc_id']} to relevant collection: {e}")
+# Relevant articles are already stored in the "articles" collection by the ingest pipeline.
+# No additional write needed here.
 
 # === Done ===
 logger.info("\n✅ Full pipeline complete.")

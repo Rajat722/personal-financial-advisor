@@ -2,7 +2,8 @@ import yfinance as yf
 import pytz
 import pandas as pd
 
-def get_stock_OHLCV_data(tickers, interval, period):
+def get_stock_OHLCV_data(tickers: list, interval: str, period: str) -> dict:
+    """Download intraday OHLCV data for each ticker and return a dict of DataFrames keyed by ticker."""
     result = {}
     # set timezone
     eastern_tz = pytz.timezone("US/Eastern")
@@ -22,7 +23,8 @@ def get_stock_OHLCV_data(tickers, interval, period):
     return result
 
 # --- Format as compact JSON (summary version for LLMs) ---
-def format_summary_json(data):
+def format_summary_json(data: dict) -> dict:
+    """Return a compact per-ticker summary (open, close, % change, volume) for LLM consumption."""
     summary = {}
     for ticker, df in data.items():
         latest = df.iloc[-1]
@@ -41,7 +43,8 @@ def format_summary_json(data):
     return summary
 
 # --- Format as time-series table (Excel-like) ---
-def format_time_series_table(data):
+def format_time_series_table(data: dict) -> dict:
+    """Return a full per-ticker time-series table with OHLCV rows for LLM prompt input."""
     table = {}
     for ticker, df in data.items():
         table[ticker] = []

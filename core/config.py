@@ -1,9 +1,16 @@
-from pydantic import BaseSettings, AnyUrl
+from typing import Optional
+from pydantic import ConfigDict
+from pydantic_settings import BaseSettings
+
 
 class Settings(BaseSettings):
+    """Application-wide configuration loaded from environment variables and .env file."""
+
+    model_config = ConfigDict(env_file=".env", extra="ignore")
+
     NEWSDATA_API_KEY: str
     GEMINI_API_KEY: str
-    MAILERSEND_API_KEY: str
+    MAILERSEND_API_KEY: Optional[str] = None  # required for email delivery; optional for pipeline-only use
 
     # Fetching
     FETCH_LANGUAGE: str = "en"
@@ -18,7 +25,7 @@ class Settings(BaseSettings):
     TZ_MARKET: str = "America/New_York"
 
     # Relevance
-    SIM_THRESHOLD: float = 0.72
+    SIM_THRESHOLD: float = 0.75
     TOP_N: int = 8
     EXACT_TICKER_BOOST: float = 0.05
 
@@ -29,12 +36,13 @@ class Settings(BaseSettings):
     METRICS_PATH: str = "state/metrics.jsonl"
 
     # LLM
-    GEMINI_EMBED_MODEL: str = "text-embedding-001"
+    GEMINI_EMBED_MODEL: str = "gemini-embedding-001"
     GEMINI_SUMMARY_MODEL: str = "gemini-2.0-flash"
     LLM_TEMPERATURE: float = 0.0
     LLM_MAX_TOKENS: int = 512
 
-    class Config:
-        env_file = ".env"
+    # Gemini retry / rate-limit handling
+    GEMINI_RETRY_ATTEMPTS: int = 3
+    GEMINI_RETRY_DELAY: float = 2.0  # base delay in seconds (doubles on each retry)
 
 settings = Settings()

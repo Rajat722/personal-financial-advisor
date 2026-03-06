@@ -1,17 +1,14 @@
+import re
+import json
 from newspaper import Article
 
-# === EXTRACT ARTICLE TEXT ===
-def extract_article_text(url):
+
+def extract_article_text(url: str) -> str:
+    """Download and parse the full text of an article from its URL."""
     article = Article(url)
     article.download()
     article.parse()
     return article.text
-
-url = "https://www.dailysabah.com/business/defense/turkiyes-akinci-ucav-completes-firing-test-with-domestic-guidance-kit"
-print(extract_article_text(url=url))
-
-import re
-import json
 
 def extract_json_block(text):
     """

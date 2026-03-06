@@ -1,56 +1,41 @@
 # main.py
-import UI.dashboard as st
-import json
 import uuid
 from datetime import datetime
-import os
 
 from model.embedder import embed_text
+from model.relevance_filter import SIMILARITY_THRESHOLD, index_portfolio_terms
 from storage.vector_store import (
     add_article_to_collection,
     find_similar_in_portfolio
 )
-from news.extract_text_from_article import extract_article_text 
+from news.extract_text_from_article import extract_article_text
 from model.model import summarize_article
+from core.logging import get_logger
 
-# Threshold above which we consider a match to be relevant
-SIMILARITY_THRESHOLD = 0.75
+log = get_logger("main")
 
-project_root = os.path.dirname(os.path.abspath(__file__))
-portfolio_path=os.path.join(project_root, "portfolio.json")
-def load_portfolio_terms():
-    with open(portfolio_path, "r") as f:
-        data = json.load(f)
-        print("printing portfolio: ", data)
-    return data["tickers"] + data["sectors"] + data["indices"]
+def is_article_relevant(article_embedding: list, threshold: float = SIMILARITY_THRESHOLD) -> bool:
+    """Return True if the article embedding is semantically close enough to the portfolio.
 
-def index_portfolio_terms(terms):
-    for term in terms:
-        emb = embed_text(term)
-        add_article_to_collection(
-            collection_name="portfolio",
-            doc_id=f"portfolio-{term}",
-            text=term,
-            embedding=emb,
-            metadata={"type": "portfolio_term", "label": term}
-        )
-
-def is_article_relevant(article_embedding, threshold=SIMILARITY_THRESHOLD):
+    ChromaDB returns cosine distances (lower = more similar).
+    Convert to similarity before comparing against threshold.
+    """
     results = find_similar_in_portfolio(article_embedding, top_k=3)
-    scores = results.get("distances", [[]])[0]
-    print("scores: \n", scores)
-    return any(score >= threshold for score in scores)
+    distances = results.get("distances", [[]])[0]
+    similarities = [1.0 - d for d in distances]
+    log.info(f"Similarity scores: {similarities}")
+    return any(sim >= threshold for sim in similarities)
 
-def main():
-    terms = load_portfolio_terms()
-    index_portfolio_terms(terms)
+def main() -> None:
+    """CLI entry point: index portfolio, prompt for a URL, summarize if relevant."""
+    index_portfolio_terms()
 
     article_url = input("Enter news article URL: ").strip()
     article_text = extract_article_text(article_url)
     article_embedding = embed_text(article_text)
 
     if is_article_relevant(article_embedding):
-        print("Article is relevant. Calling Gemini for summarization...")
+        log.info("Article is relevant. Calling Gemini for summarization...")
         summary_json = summarize_article(article_text)
 
         doc_id = f"article-{str(uuid.uuid4())}"
@@ -63,10 +48,10 @@ def main():
         }
         add_article_to_collection("articles", doc_id, article_text, article_embedding, metadata)
 
-        print("Summary saved successfully.")
-        print(summary_json)
+        log.info("Summary saved successfully.")
+        log.info(summary_json)
     else:
-        print("Article is not relevant to the portfolio. Skipping.")
+        log.info("Article is not relevant to the portfolio. Skipping.")
 
 if __name__ == "__main__":
     main()

@@ -1,6 +1,7 @@
 import logging, sys
 
-def get_logger(name: str):
+def get_logger(name: str) -> logging.Logger:
+    """Return a stdout logger with INFO level and a standard timestamp format."""
     log = logging.getLogger(name)
     if not log.handlers:
         h = logging.StreamHandler(sys.stdout)
