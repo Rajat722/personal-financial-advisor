@@ -130,8 +130,9 @@ def get_insights_from_news_and_prices(article_blocks: str, time_series_json: str
     response = _client.models.generate_content(model=settings.GEMINI_SUMMARY_MODEL, contents=prompt)
     return response.text
 
-def build_eod_summary_prompt(insights_json: str, summarized_articles: str) -> str:
+def build_eod_summary_prompt(insights_json: str, summarized_articles: str, earnings_context: str = "") -> str:
     """Build a Gemini prompt to generate a narrative end-of-day market summary."""
+    earnings_section = earnings_context.strip() if earnings_context.strip() else "No portfolio earnings events in the next 14 days."
     return f"""
 You are a financial news assistant writing a personalized end-of-day digest for a retail investor.
 
@@ -141,6 +142,7 @@ STRICT RULES:
 - Do NOT invent price targets, analyst ratings, or events not stated in the source material.
 - Every claim must trace directly to an article or insight provided to you.
 - If the inputs contain no relevant information for a section, write "No relevant updates today."
+- For the Earnings Calendar section, reproduce the data exactly as provided — do not invent estimates, dates, or results.
 
 Write a concise, professional summary using this structure:
 
@@ -148,6 +150,9 @@ Write a concise, professional summary using this structure:
 Key Market Insights
 - [Insight 1 — grounded in provided data]
 - [Insight 2 — grounded in provided data]
+
+Upcoming Earnings (your portfolio)
+{earnings_section}
 
 News That Mattered Today
 - "[Article Title]" — [1-sentence summary based only on article content]
@@ -163,8 +168,8 @@ Article summaries provided:
 
 
 @gemini_retry(max_attempts=settings.GEMINI_RETRY_ATTEMPTS, base_delay=settings.GEMINI_RETRY_DELAY)
-def get_end_of_day_summary(insights_json: str, summarized_articles: str) -> str:
+def get_end_of_day_summary(insights_json: str, summarized_articles: str, earnings_context: str = "") -> str:
     """Generate and return a personalized end-of-day market digest via Gemini."""
-    prompt = build_eod_summary_prompt(insights_json, summarized_articles)
+    prompt = build_eod_summary_prompt(insights_json, summarized_articles, earnings_context)
     response = _client.models.generate_content(model=settings.GEMINI_SUMMARY_MODEL, contents=prompt)
     return response.text

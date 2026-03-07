@@ -66,7 +66,7 @@ def find_similar_in_portfolio(query_embedding: list, top_k: int = 5) -> dict:
     return collection.query(
         query_embeddings=[query_embedding],
         n_results=top_k,
-        include=["ids", "documents", "metadatas", "distances"]
+        include=["documents", "metadatas", "distances"]
     )
 
 

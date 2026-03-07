@@ -7,11 +7,16 @@ from storage.vector_store import get_article_collection, find_similar_in_portfol
 from model.embedder import GeminiEmbedder
 from core.config import settings
 from core.logging import get_logger
+from news.noise_filter import is_noise_article
 
 log = get_logger("relevance_filter")
 
 # Configurable via SIMILARITY_THRESHOLD env var (defaults to settings.SIM_THRESHOLD = 0.75)
 SIMILARITY_THRESHOLD: float = settings.SIM_THRESHOLD
+
+# Maximum articles passed to the LLM — keeps prompt size manageable and digest readable.
+# Articles are sorted by similarity score descending; only the top N are used.
+MAX_RELEVANT_ARTICLES: int = 40
 
 embedder = GeminiEmbedder()
 
@@ -133,11 +138,21 @@ def find_relevant_articles_from_context() -> list:
 
     log.info(f"Scanning {len(article_ids)} articles against portfolio (threshold={SIMILARITY_THRESHOLD})")
 
+    noise_skipped = 0
     for doc_id, text, metadata, embedding in zip(
         article_ids, article_texts, article_metadatas, article_embeddings
     ):
         if embedding is None:
             log.warning(f"Skipping {doc_id} — embedding is None")
+            continue
+
+        title = metadata.get("title", doc_id)
+
+        # Second-line noise filter: catches institutional disclosures that were
+        # stored before the ingest-time noise filter was in place.
+        if is_noise_article(title):
+            log.debug(f"[NOISE] {title[:70]}")
+            noise_skipped += 1
             continue
 
         try:
@@ -151,11 +166,10 @@ def find_relevant_articles_from_context() -> list:
             best_distance = min(distances)
             best_similarity = 1.0 - best_distance
             best_match = portfolio_docs[distances.index(best_distance)] if portfolio_docs else "unknown"
-            title = metadata.get("title", doc_id)
 
-            log.debug(
-                f"[{title[:60]}] best_match='{best_match}' similarity={best_similarity:.3f} "
-                f"({'PASS' if best_similarity >= SIMILARITY_THRESHOLD else 'FAIL'})"
+            log.info(
+                f"[{'PASS' if best_similarity >= SIMILARITY_THRESHOLD else 'FAIL'}] "
+                f"similarity={best_similarity:.3f} match='{best_match}' | {title[:70]}"
             )
 
             # ChromaDB returns cosine distances (0=identical). Convert to similarity.
@@ -171,7 +185,17 @@ def find_relevant_articles_from_context() -> list:
         except Exception as e:
             log.warning(f"Skipping {doc_id} due to error: {e}")
 
-    log.info(f"Found {len(relevant_articles)} relevant articles out of {len(article_ids)} total.")
+    # Sort by relevance score descending; cap at MAX_RELEVANT_ARTICLES.
+    # This keeps the LLM prompt size manageable and the digest readable.
+    relevant_articles.sort(key=lambda a: a["best_similarity"], reverse=True)
+    if len(relevant_articles) > MAX_RELEVANT_ARTICLES:
+        log.info(f"Capping to top {MAX_RELEVANT_ARTICLES} articles (dropped {len(relevant_articles) - MAX_RELEVANT_ARTICLES} lower-scored).")
+        relevant_articles = relevant_articles[:MAX_RELEVANT_ARTICLES]
+
+    log.info(
+        f"Found {len(relevant_articles)} relevant articles out of {len(article_ids)} total "
+        f"({noise_skipped} noise-skipped at query time)."
+    )
     return relevant_articles
 
 

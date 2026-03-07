@@ -37,12 +37,12 @@ class Settings(BaseSettings):
 
     # LLM
     GEMINI_EMBED_MODEL: str = "gemini-embedding-001"
-    GEMINI_SUMMARY_MODEL: str = "gemini-2.0-flash"
+    GEMINI_SUMMARY_MODEL: str = "gemini-2.5-flash-lite"
     LLM_TEMPERATURE: float = 0.0
     LLM_MAX_TOKENS: int = 512
 
     # Gemini retry / rate-limit handling
     GEMINI_RETRY_ATTEMPTS: int = 3
-    GEMINI_RETRY_DELAY: float = 2.0  # base delay in seconds (doubles on each retry)
+    GEMINI_RETRY_DELAY: float = 1.0  # base delay in seconds (doubles on each retry)
 
 settings = Settings()
