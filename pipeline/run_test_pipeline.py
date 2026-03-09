@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.logging import get_logger
 from model.relevance_filter import find_relevant_articles_from_context, index_portfolio_terms
-from utils.stock_details import get_stock_OHLCV_data, format_time_series_table, get_upcoming_earnings
+from utils.stock_details import get_stock_OHLCV_data, format_summary_json, format_time_series_table, get_upcoming_earnings
 from model.model import summarize_multiple_articles, get_insights_from_news_and_prices, get_end_of_day_summary
 from storage.vector_store import get_portfolio_collection
 
@@ -40,12 +40,21 @@ def _log_ts() -> str:
 
 
 def _attach_run_log() -> Path:
-    """Attach an INFO-level file handler to the root logger so all module output is saved."""
+    """Attach an INFO-level file handler to the root logger so all module output is saved.
+
+    Third-party libraries (httpcore, httpx, chromadb, google) emit DEBUG logs that flood
+    the file. Suppress them at WARNING so only application-level INFO logs are written.
+    """
     log_path = _DIR_RUNS / f"pipeline_run_{_log_ts()}.log"
     handler = logging.FileHandler(log_path, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s | %(message)s"))
     handler.setLevel(logging.INFO)
     logging.getLogger().addHandler(handler)
+
+    # Suppress noisy third-party library loggers
+    for noisy in ("httpcore", "httpx", "chromadb", "google", "urllib3", "hpack"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
     return log_path
 
 
@@ -148,7 +157,14 @@ def _enrich_articles_with_full_text(articles: list) -> int:
             continue
         body = _fetch_article_body(url)
         if body and len(body.strip()) > 200:
-            article['text'] = article['text'] + "\n\nFull article text:\n" + body.strip()[:3000]
+            # Remove consecutive duplicate lines — scraping artifacts from pagination/disclaimers
+            raw_lines = body.strip().splitlines()
+            deduped: list[str] = [raw_lines[0]] if raw_lines else []
+            for line in raw_lines[1:]:
+                if line.strip() != deduped[-1].strip():
+                    deduped.append(line)
+            body = "\n".join(deduped)
+            article['text'] = article['text'] + "\n\nFull article text:\n" + body[:3000]
             enriched += 1
     return enriched
 
@@ -192,6 +208,130 @@ def _extract_relevant_tickers(articles: list, portfolio: dict) -> list[str]:
 
     matched = sorted(relevant_tickers & ticker_set)
     return matched if matched else all_tickers
+
+
+def _build_portfolio_summary(stock_data: dict, portfolio: dict) -> str:
+    """Compute portfolio value, day P&L, and top mover from OHLCV data + portfolio holdings."""
+    shares_map = {e["ticker"]: (e["shares"], e["avg_cost_basis"]) for e in portfolio["equities"]}
+    summary = format_summary_json(stock_data)
+
+    total_value = 0.0
+    total_cost = 0.0
+    day_pnl = 0.0
+    movers: list[tuple[str, float]] = []  # (ticker, day_change_pct)
+
+    for ticker, data in summary.items():
+        if ticker not in shares_map:
+            continue
+        shares, avg_cost = shares_map[ticker]
+        close = data["close"]
+        open_ = data["open"]
+        market_value = shares * close
+        total_value += market_value
+        total_cost += shares * avg_cost
+        day_pnl += shares * (close - open_)
+        movers.append((ticker, data["change_percent"]))
+
+    if not movers:
+        return ""
+
+    movers.sort(key=lambda x: x[1], reverse=True)
+    top_gainer = movers[0]
+    top_loser = movers[-1]
+    total_gain = total_value - total_cost
+    total_gain_pct = (total_gain / total_cost * 100) if total_cost else 0.0
+    day_sign = "+" if day_pnl >= 0 else ""
+    gain_sign = "+" if total_gain >= 0 else ""
+
+    lines = [
+        "## Portfolio Snapshot",
+        f"**Est. Value:** ${total_value:,.0f}  |  "
+        f"**Today's P&L:** {day_sign}${day_pnl:,.0f}  |  "
+        f"**Total Gain:** {gain_sign}${total_gain:,.0f} ({gain_sign}{total_gain_pct:.1f}%)",
+        f"**Top Gainer:** {top_gainer[0]} ({'+' if top_gainer[1] >= 0 else ''}{top_gainer[1]:.1f}%)  |  "
+        f"**Top Loser:** {top_loser[0]} ({top_loser[1]:.1f}%)",
+        f"_(Based on {len(movers)} of {len(portfolio['equities'])} holdings with today's data)_",
+    ]
+    return "\n".join(lines)
+
+
+def _cap_key_insights(eod_text: str, limit: int = 15) -> str:
+    """Post-process the LLM EOD summary to enforce the Key Market Insights bullet cap.
+
+    The LLM is instructed to write ≤15 bullets but sometimes ignores the limit.
+    This finds the Key Market Insights block, slices it to `limit` bullets, and
+    reinserts it — leaving all other sections untouched.
+    """
+    # Match the section header and all bullet lines that follow it
+    pattern = re.compile(
+        r"(Key Market Insights\s*\n)((?:\s*-[^\n]+\n?)+)",
+        re.IGNORECASE,
+    )
+    match = pattern.search(eod_text)
+    if not match:
+        return eod_text
+
+    bullets_block = match.group(2)
+    bullets = [line for line in bullets_block.splitlines() if line.strip().startswith("-")]
+
+    if len(bullets) <= limit:
+        return eod_text  # already within limit, nothing to do
+
+    capped = "\n".join(bullets[:limit]) + "\n"
+    logger.info(f"Key Market Insights capped: {len(bullets)} → {limit} bullets.")
+    return eod_text[: match.start(2)] + capped + eod_text[match.end(2):]
+
+
+def _truncate_at_sentence(text: str, limit: int = 200) -> str:
+    """Truncate text at the last complete sentence within limit chars.
+
+    Finds the last period followed by whitespace or end-of-string within limit.
+    Falls back to hard truncation with ellipsis if no sentence boundary is found.
+    """
+    if len(text) <= limit:
+        return text
+    truncated = text[:limit]
+    # Find last period+space or period at end within the truncated region
+    last_period = max(truncated.rfind(". "), truncated.rfind(".\t"))
+    if last_period > limit // 2:
+        return truncated[:last_period + 1]
+    # No sentence boundary found — hard truncate
+    return truncated.rstrip() + "…"
+
+
+def _build_movers_section(stock_data: dict, insights_response: str) -> str:
+    """Build a Movers & Drivers table from OHLCV data and the Gemini insights JSON."""
+    summary = format_summary_json(stock_data)
+    if not summary:
+        return ""
+
+    # Parse insights JSON → best driver string per ticker (first insight = highest quality)
+    ticker_drivers: dict[str, str] = {}
+    try:
+        raw = insights_response.strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```[^\n]*\n?", "", raw)
+            raw = re.sub(r"\n?```$", "", raw.strip())
+        for item in json.loads(raw).get("insights", []):
+            t = item.get("ticker", "")
+            if t and t not in ticker_drivers and item.get("insight"):
+                ticker_drivers[t] = _truncate_at_sentence(item["insight"], limit=200)
+    except Exception:
+        pass
+
+    rows = sorted(
+        [(t, d["change_percent"]) for t, d in summary.items()],
+        key=lambda x: abs(x[1]),
+        reverse=True,
+    )
+
+    lines = ["## Movers & Drivers", "| Ticker | Change | Driver |", "|--------|--------|--------|"]
+    for ticker, pct in rows:
+        arrow = "▲" if pct >= 0 else "▼"
+        sign = "+" if pct >= 0 else ""
+        driver = ticker_drivers.get(ticker, "No specific driver identified today.")
+        lines.append(f"| **{ticker}** | {arrow} {sign}{pct:.1f}% | {driver} |")
+    return "\n".join(lines)
 
 
 def run_pipeline() -> None:
@@ -270,13 +410,20 @@ def run_pipeline() -> None:
         logger.error(f"Failed to summarize articles: {e}")
         summarized_articles_json = "[]"
 
+    # === Step 8.5: Build computed sections (no LLM needed) ===
+    portfolio_summary = _build_portfolio_summary(stock_data, portfolio)
+    movers_section = _build_movers_section(stock_data, insights_response)
+
     # === Step 9: Generate end-of-day digest ===
     logger.info("Generating end-of-day digest via Gemini...")
     try:
         eod_summary = get_end_of_day_summary(insights_response, summarized_articles_json, earnings_context)
         logger.info(f"EOD digest generated ({len(eod_summary)} chars).")
-        save_eod_digest(eod_summary)
-        logger.info("\n--- EOD DIGEST ---\n" + eod_summary + "\n--- END DIGEST ---")
+        eod_summary = _cap_key_insights(eod_summary, limit=15)
+        prefix_parts = [p for p in [portfolio_summary, movers_section] if p]
+        full_digest = "\n\n---\n\n".join(prefix_parts + [eod_summary])
+        save_eod_digest(full_digest)
+        logger.info("\n--- EOD DIGEST ---\n" + full_digest + "\n--- END DIGEST ---")
     except Exception as e:
         logger.error(f"Failed to generate EOD summary: {e}")
 

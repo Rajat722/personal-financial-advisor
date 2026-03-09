@@ -11,7 +11,7 @@ from core.config import settings
 from core.logging import get_logger
 from news.normalize import normalize_article
 from news.newsdata import fetch_finance_news_from_newsdataio
-from news.noise_filter import is_noise_article as _is_noise_article
+from news.noise_filter import is_noise_article as _is_noise_article, is_generic_roundup as _is_generic_roundup
 from model.embedder import GeminiEmbedder
 from storage.vector_store import upsert_to_collection, get_article_collection
 
@@ -155,6 +155,7 @@ def ingest_daily_news() -> int:
 
     stored_count = 0
     noise_count = 0
+    roundup_count = 0
     id_dup_count = 0
     title_dup_count = 0
     no_summary_count = 0
@@ -195,6 +196,12 @@ def ingest_daily_news() -> int:
         if _is_noise_article(article.title):
             log.debug(f"Filtering noise: {article.title}")
             noise_count += 1
+            continue
+
+        # Roundup filter: generic SEO stock-list articles ("Best Tech Stocks To Watch Today")
+        if _is_generic_roundup(article.title):
+            log.debug(f"Filtering roundup: {article.title}")
+            roundup_count += 1
             continue
 
         if not article.summary:
@@ -238,6 +245,7 @@ def ingest_daily_news() -> int:
     log.info(
         f"Ingestion complete: {stored_count} stored | "
         f"{noise_count} noise-filtered | "
+        f"{roundup_count} roundup-filtered | "
         f"{id_dup_count} id-dups | "
         f"{title_dup_count} title-dups | "
         f"{no_summary_count} no-summary | "

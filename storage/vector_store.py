@@ -12,8 +12,15 @@ client = chromadb.PersistentClient(path=CHROMA_DIR, settings=Settings(anonymized
 
 
 def get_portfolio_collection():
-    """Return the portfolio ChromaDB collection."""
-    return client.get_or_create_collection(name="portfolio")
+    """Return the portfolio ChromaDB collection (cosine metric).
+
+    Using cosine distance means ChromaDB returns values where 0=identical and 2=opposite.
+    Converting: similarity = 1 - distance gives correct cosine similarity in [0, 1].
+    """
+    return client.get_or_create_collection(
+        name="portfolio",
+        metadata={"hnsw:space": "cosine"},
+    )
 
 
 def get_article_collection():

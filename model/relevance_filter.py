@@ -1,6 +1,7 @@
 # relevance_filter.py
 
 import json
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from storage.vector_store import get_article_collection, find_similar_in_portfolio, add_to_collection
@@ -120,6 +121,23 @@ def index_portfolio_terms(path: str | None = None) -> None:
             add_to_collection("portfolio", f"portfolio-company-{ticker}", company, embedding, {"type": "portfolio_term"})
 
 
+def _dedupe_by_title_similarity(articles: list, threshold: float = 0.85) -> list:
+    """Remove near-duplicate articles based on title similarity using SequenceMatcher."""
+    kept = []
+    for article in articles:
+        title = article["metadata"].get("title", "").lower()
+        is_dup = any(
+            SequenceMatcher(None, title, k["metadata"].get("title", "").lower()).ratio() >= threshold
+            for k in kept
+        )
+        if not is_dup:
+            kept.append(article)
+    dropped = len(articles) - len(kept)
+    if dropped:
+        log.info(f"Deduplication removed {dropped} near-duplicate articles by title.")
+    return kept
+
+
 # --- Retrieve relevant articles from the articles collection ---
 def find_relevant_articles_from_context() -> list:
     """Return all articles whose embeddings match the portfolio above the similarity threshold.
@@ -191,6 +209,8 @@ def find_relevant_articles_from_context() -> list:
     if len(relevant_articles) > MAX_RELEVANT_ARTICLES:
         log.info(f"Capping to top {MAX_RELEVANT_ARTICLES} articles (dropped {len(relevant_articles) - MAX_RELEVANT_ARTICLES} lower-scored).")
         relevant_articles = relevant_articles[:MAX_RELEVANT_ARTICLES]
+
+    relevant_articles = _dedupe_by_title_similarity(relevant_articles)
 
     log.info(
         f"Found {len(relevant_articles)} relevant articles out of {len(article_ids)} total "

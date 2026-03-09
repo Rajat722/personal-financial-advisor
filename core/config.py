@@ -9,7 +9,9 @@ class Settings(BaseSettings):
     model_config = ConfigDict(env_file=".env", extra="ignore")
 
     NEWSDATA_API_KEY: str
+    NEWSDATA_FALLBACK_API_KEY: Optional[str] = None  # secondary account key; used when primary credits are exhausted
     GEMINI_API_KEY: str
+    GEMINI_FALLBACK_API_KEY: Optional[str] = None    # secondary account key; used when primary credits are exhausted
     MAILERSEND_API_KEY: Optional[str] = None  # required for email delivery; optional for pipeline-only use
 
     # Fetching
