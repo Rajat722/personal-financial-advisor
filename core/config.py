@@ -39,7 +39,9 @@ class Settings(BaseSettings):
 
     # LLM
     GEMINI_EMBED_MODEL: str = "gemini-embedding-001"
-    GEMINI_SUMMARY_MODEL: str = "gemini-2.5-flash-lite"
+    GEMINI_SUMMARY_MODEL: str = "gemini-2.5-flash-lite"  # kept for backward compat
+    GEMINI_EXTRACT_MODEL: str = "gemini-2.5-flash-lite"   # Call 1: factual extraction (fast, cheap)
+    GEMINI_EDITORIAL_MODEL: str = "gemini-2.5-flash"      # Call 2: newsletter writing (higher quality)
     LLM_TEMPERATURE: float = 0.0
     LLM_MAX_TOKENS: int = 512
 

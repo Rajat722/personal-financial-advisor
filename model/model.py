@@ -26,14 +26,15 @@ _fallback_client = (
 _primary_exhausted: bool = False
 
 
-def _generate(contents: str) -> str:
+def _generate(contents: str, model: str | None = None) -> str:
     """Call generate_content with primary key; fall back to secondary on quota exhaustion."""
     global _primary_exhausted
+    model = model or settings.GEMINI_EXTRACT_MODEL
 
     if not _primary_exhausted:
         try:
             return _primary_client.models.generate_content(
-                model=settings.GEMINI_SUMMARY_MODEL, contents=contents
+                model=model, contents=contents
             ).text
         except ResourceExhausted:
             if _fallback_client is None:
@@ -42,7 +43,6 @@ def _generate(contents: str) -> str:
                 )
             log.warning("Primary Gemini key quota exhausted — switching to fallback key.")
             _primary_exhausted = True
-        # Fall through to fallback.
 
     if _fallback_client is None:
         raise RuntimeError(
@@ -50,84 +50,10 @@ def _generate(contents: str) -> str:
         )
     try:
         return _fallback_client.models.generate_content(
-            model=settings.GEMINI_SUMMARY_MODEL, contents=contents
+            model=model, contents=contents
         ).text
     except ResourceExhausted as e:
         raise RuntimeError("Both Gemini API keys have exhausted their quota.") from e
-
-def build_article_summary_prompt(article_text: str) -> str:
-    """Build a Gemini prompt to extract entity and top 5 insights from a single article."""
-    return f"""
-You are a financial analyst AI. Your job is to extract structured information from a news article.
-
-STRICT RULES — you must follow these exactly:
-- Only reference information explicitly stated in the article text below.
-- Do NOT infer, speculate, or add context not present in the article.
-- Do NOT mention any company, ticker, or event not directly named in the article.
-- If a stock ticker is not mentioned by name in the article, do not reference it.
-- Insights must quote or paraphrase the article directly.
-
-Return a JSON object with this format:
-{{
-  "entity": "The single most important company, stock, or institution explicitly named in the article",
-  "insights": [
-    "Insight 1 — directly from article content",
-    "Insight 2 — directly from article content",
-    "Insight 3 — directly from article content",
-    "Insight 4 — directly from article content",
-    "Insight 5 — directly from article content"
-  ]
-}}
-
-Article:
-\"\"\"
-{article_text}
-\"\"\"
-"""
-
-
-@gemini_retry(max_attempts=settings.GEMINI_RETRY_ATTEMPTS, base_delay=settings.GEMINI_RETRY_DELAY)
-def summarize_article(article_text: str) -> str:
-    """Summarize a single article via Gemini and return JSON string with entity and insights."""
-    prompt = build_article_summary_prompt(article_text)
-    return _generate(prompt)
-
-def build_multi_article_summary_prompt(article_blocks: str) -> str:
-    """Build a Gemini prompt to summarize multiple articles in a single call."""
-    return f"""
-You are a financial analyst AI. Summarize each article below.
-
-STRICT RULES — you must follow these exactly:
-- Only use information explicitly stated in each article.
-- Do NOT infer, speculate, or add context not in the article text.
-- Do NOT reference any ticker or company not directly named in that article.
-- Each insight must be grounded in the article it came from.
-
-Return a JSON array where each element corresponds to one article (in order):
-[
-  {{
-    "title": "exact article title",
-    "entity": "single most important company or stock explicitly named in the article",
-    "insights": [
-      "Insight 1 — directly from article",
-      "Insight 2 — directly from article",
-      "Insight 3 — directly from article"
-    ]
-  }},
-  ...
-]
-
-Articles:
-\"\"\"
-{article_blocks}
-\"\"\"
-"""
-
-@gemini_retry(max_attempts=settings.GEMINI_RETRY_ATTEMPTS, base_delay=settings.GEMINI_RETRY_DELAY)
-def summarize_multiple_articles(article_blocks: str) -> str:
-    """Batch-summarize multiple articles via Gemini and return a JSON array string."""
-    prompt = build_multi_article_summary_prompt(article_blocks)
-    return _generate(prompt)
 
 def build_insight_prompt(article_blocks: str, time_series_json: str) -> str:
     """Build a Gemini prompt correlating news articles with intraday price movements."""
@@ -172,54 +98,113 @@ News articles:
 def get_insights_from_news_and_prices(article_blocks: str, time_series_json: str) -> str:
     """Return Gemini-generated JSON insights linking news events to portfolio price movements."""
     prompt = build_insight_prompt(article_blocks, time_series_json)
-    return _generate(prompt)
+    return _generate(prompt, model=settings.GEMINI_EXTRACT_MODEL)
 
-def build_eod_summary_prompt(insights_json: str, summarized_articles: str, earnings_context: str = "") -> str:
-    """Build a Gemini prompt to generate a narrative end-of-day market summary."""
+
+def build_editorial_prompt(
+    insights_json: str,
+    portfolio_snapshot: str,
+    movers_table: str,
+    article_titles_urls: str,
+    earnings_context: str = "",
+) -> str:
+    """Build the Call 2 editorial prompt: takes analyst data and writes a polished newsletter."""
     earnings_section = earnings_context.strip() if earnings_context.strip() else "No portfolio earnings events in the next 14 days."
-    return f"""
-You are a financial news assistant writing a personalized end-of-day digest for a retail investor.
+    return f"""You are the editor-in-chief of Portfolio Pulse, a personalized daily finance newsletter for retail investors aged 25-35 who hold 5-20 stocks. You write like a sharp, concise financial journalist — not a robot, not a textbook.
 
-STRICT RULES:
-- Only discuss companies, tickers, sectors, or events explicitly present in the insights and article summaries below.
-- Do NOT mention any ticker not referenced in the inputs.
-- Do NOT invent price targets, analyst ratings, or events not stated in the source material.
-- Every claim must trace directly to an article or insight provided to you.
-- If the inputs contain no relevant information for a section, write "No relevant updates today."
-- For the Earnings Calendar section, reproduce the data exactly as provided — do not invent estimates, dates, or results.
-- DEDUPLICATION: If the same fact, statistic, or event appears in multiple articles, mention it EXACTLY ONCE in its most complete form. Do not repeat the same bullet point or restate the same number/event in different words.
-- COMPLETENESS: Cover EVERY distinct company or ticker that has substantive news in the inputs. Do not drop any company. If a company has multiple articles, consolidate them into one or two bullet points — do not skip the company entirely.
-- KEY MARKET INSIGHTS must prioritize: earnings/revenue results with numbers, analyst rating or price target changes with specific values, significant % price movements, product launches, M&A, and management changes. Do NOT include: ETF holdings mentions, companies merely listed in a group, or generic market observations with no specific data.
-- KEY MARKET INSIGHTS LIMIT: Maximum 15 bullets total — this is a hard limit. Consolidate all insights for a single ticker into EXACTLY ONE bullet — the single most important fact for that ticker. Never write two bullets for the same ticker. If you have more than 15 tickers with news, pick the 15 most significant. Rank by: earnings beats/misses > analyst upgrades/price targets > product launches > general commentary.
-- SECTION ROLES — avoid repeating the same fact across sections: The Movers & Drivers table already covers price movement and primary driver for each stock. Key Market Insights should add DIFFERENT facts not already stated as a Movers driver: additional earnings details, analyst upgrades, product launches, M&A. News That Mattered Today should cover articles whose key points were NOT already mentioned in Key Market Insights — do not restate the same earnings number or event that already appears above.
-- INSIDER TRANSACTIONS: Do NOT mention insider stock sales or purchases under $1,000,000 (one million dollars total value). Only cite insider transactions exceeding $1M — these are material. Example to exclude: a COO selling 629 shares totaling $400K. Example to include: a CFO selling $36M worth of shares.
-- NEWS THAT MATTERED TODAY: Include AT MOST 10 items — this is a hard limit, never exceed it. Rank by importance and pick the 10 most impactful articles. Each article must appear AT MOST ONCE. Do NOT create multiple entries for the same article title. For each article, write exactly one bullet with the single most important insight from that article in one sentence. If two articles cover the same story, pick the one with more detail and skip the other. Skip any article whose key point was already covered in Key Market Insights.
+You are given pre-extracted analyst data (structured JSON), a computed portfolio snapshot, a computed movers table, article titles with URLs, and an earnings calendar. The analyst already extracted the facts. Your job is to WRITE the newsletter — add editorial judgment, condense redundant information, and explain why things matter to someone who checks Robinhood but doesn't read the WSJ.
 
-Write a concise, professional summary using this structure:
+=== SECTION 1: KEY MARKET INSIGHTS ===
 
----
-Key Market Insights
-- [Company/Ticker]: [Specific fact — earnings number, % move, PT change, product launch, etc.]
-- [Company/Ticker]: [Specific fact — grounded in provided data]
+Write a bullet list of the most important facts for the reader's holdings.
 
-Upcoming Earnings (your portfolio)
+RULES:
+- HARD LIMIT: Maximum 15 bullets. If there are more than 15 tickers with news, pick the 15 most significant.
+- ONE bullet per ticker — consolidate all facts for a ticker into a single, information-dense bullet. If COST has an earnings beat AND a price target raise, combine them: "COST: Earnings beat ($4.58 vs $4.55 est.) and BMO raised PT to $1,315 from $1,175."
+- Rank by importance: earnings beats/misses with numbers > analyst upgrades/price targets > product launches > management changes > general commentary.
+- Do NOT repeat any fact that already appears as a driver in the Movers & Drivers table below. Key Insights should add DIFFERENT or ADDITIONAL facts for each ticker. If the Movers driver already says "Costco EPS of $4.58 beat estimates," then Key Insights for COST should cover the PT raise or tariff refund news instead.
+- INSIDER TRANSACTIONS: Do NOT mention insider stock sales or purchases under $1,000,000 total value. Only include insider transactions above $1M.
+- Each bullet starts with the ticker symbol followed by a colon.
+- Every fact must come from the analyst insights JSON below. Do not invent numbers, price targets, or events.
+
+=== SECTION 2: UPCOMING EARNINGS ===
+
+Reproduce this exactly as provided:
 {earnings_section}
 
+=== SECTION 3: NEWS THAT MATTERED TODAY — "The Stories Behind the Moves" ===
+
+Select the TOP 8 most impactful stories. For each story:
+- Write a SHORT, punchy headline (rewrite the original title to be cleaner — drop exchange tags like "NASDAQ:COST", drop clickbait phrasing like "Here's Why")
+- Write 1-2 sentences summarizing the key fact from the article
+- Write a "Why it matters:" analysis sentence that connects the fact to what it means for the reader's portfolio. This is the editorial value-add. Use your financial knowledge to explain implications — what does an earnings beat signal? What does an insider sale pattern suggest? Why should a Robinhood investor care?
+
+RULES FOR "Why it matters:":
+- Your ANALYSIS can draw on general financial knowledge (e.g., "beating EPS by 13% while the stock falls is a classic buy-the-rumor-sell-the-news pattern")
+- But every FACT you cite must come from the analyst insights JSON. Never invent specific numbers, price targets, analyst names, or events not in the data.
+- If two articles cover the same event (e.g., two COST earnings articles), merge them into ONE story with the combined facts. Do not list both.
+- Skip any article whose key fact was already fully covered in Key Market Insights — do not repeat the same information.
+- Tone: confident, direct, occasional wit. Write for a smart 28-year-old, not a finance professor.
+
+=== OUTPUT FORMAT ===
+
+Write in this exact markdown structure:
+
+Key Market Insights
+- TICKER: [condensed, information-dense bullet with the single most important NEW fact]
+- TICKER: [condensed bullet]
+
+Upcoming Earnings (your portfolio)
+[earnings data as provided]
+
 News That Mattered Today
-- "[Exact Article Title]" — [One sentence covering the article's single most important point]
-- "[Exact Article Title]" — [One sentence covering the article's single most important point]
----
+**[Clean Headline]**
+[1-2 sentence summary of key fact.] **Why it matters:** [Editorial analysis connecting the fact to the reader's portfolio — what does this mean, why should they care, what's the implication.]
 
-Insights provided:
+**[Clean Headline]**
+[1-2 sentence summary.] **Why it matters:** [Editorial analysis.]
+
+=== STRICT RULES ===
+- Every factual claim must trace to the analyst insights JSON or article titles provided. Do NOT hallucinate.
+- Do NOT mention any ticker not present in the insights data.
+- Do NOT invent price targets, analyst ratings, revenue numbers, or events.
+- DEDUPLICATION: If the same fact appears in the insights JSON multiple times (same event from different articles), mention it ONCE in its most complete form.
+- The Movers & Drivers table is already written and will appear above your output. Do NOT regenerate it. Do NOT write a Portfolio Snapshot section — that's also already computed.
+
+=== INPUT DATA ===
+
+PORTFOLIO SNAPSHOT (already rendered — for your context only, do not reproduce):
+\"\"\"
+{portfolio_snapshot}
+\"\"\"
+
+MOVERS & DRIVERS TABLE (already rendered — for your context only, do not repeat these driver facts in Key Insights):
+\"\"\"
+{movers_table}
+\"\"\"
+
+ANALYST INSIGHTS JSON (source of truth for all facts):
+\"\"\"
 {insights_json}
+\"\"\"
 
-Article summaries provided:
-{summarized_articles}
+ARTICLE TITLES AND URLS (for attribution in News section):
+\"\"\"
+{article_titles_urls}
+\"\"\"
 """
 
 
 @gemini_retry(max_attempts=settings.GEMINI_RETRY_ATTEMPTS, base_delay=settings.GEMINI_RETRY_DELAY)
-def get_end_of_day_summary(insights_json: str, summarized_articles: str, earnings_context: str = "") -> str:
-    """Generate and return a personalized end-of-day market digest via Gemini."""
-    prompt = build_eod_summary_prompt(insights_json, summarized_articles, earnings_context)
-    return _generate(prompt)
+def generate_editorial_digest(
+    insights_json: str,
+    portfolio_snapshot: str,
+    movers_table: str,
+    article_titles_urls: str,
+    earnings_context: str = "",
+) -> str:
+    """Generate the editorial newsletter via Gemini flash (Call 2)."""
+    prompt = build_editorial_prompt(
+        insights_json, portfolio_snapshot, movers_table, article_titles_urls, earnings_context
+    )
+    return _generate(prompt, model=settings.GEMINI_EDITORIAL_MODEL)
