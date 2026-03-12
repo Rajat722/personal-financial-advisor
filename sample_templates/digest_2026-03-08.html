@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Portfolio Pulse — March 8, 2026</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #f0f0f0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      color: #1a1a1a;
+      font-size: 16px;
+      line-height: 1.6;
+    }
+
+    .wrapper {
+      max-width: 640px;
+      margin: 24px auto;
+      background: #ffffff;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    /* ── Meta / Published ── */
+    .meta {
+      padding: 20px 36px 0;
+      font-size: 13px;
+      color: #999;
+    }
+
+    /* ── Header ── */
+    .header {
+      padding: 14px 36px 12px;
+    }
+    .brand {
+      font-size: 38px;
+      font-weight: 800;
+      letter-spacing: -1.5px;
+      line-height: 1.1;
+      color: #1a1a1a;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .brand-icon {
+      font-size: 34px;
+      line-height: 1;
+    }
+    .tagline {
+      font-size: 17px;
+      font-style: italic;
+      color: #666;
+      margin-top: 2px;
+      padding-left: 46px;
+    }
+
+    /* ── Intro ── */
+    .intro {
+      padding: 10px 36px 22px;
+      font-size: 16px;
+      line-height: 1.65;
+      color: #1a1a1a;
+    }
+    .intro p { margin-bottom: 12px; }
+    .intro p:last-child { margin-bottom: 0; }
+
+    /* ── Blue divider with icon ── */
+    .divider {
+      display: flex;
+      align-items: center;
+      padding: 4px 36px;
+    }
+    .divider-line {
+      flex: 1;
+      height: 2px;
+      background: #2952cc;
+    }
+    .divider-circle {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: 2px solid #2952cc;
+      background: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 10px;
+      font-size: 15px;
+      flex-shrink: 0;
+    }
+
+    /* ── Sections ── */
+    .section {
+      padding: 22px 36px;
+    }
+    .section-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 2.5px;
+      color: #2952cc;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+    .section-title {
+      font-size: 22px;
+      font-weight: 700;
+      color: #1a1a1a;
+      margin-bottom: 18px;
+      line-height: 1.25;
+    }
+
+    /* ── Portfolio snapshot stats ── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .stat-box {
+      background: #f5f7ff;
+      border-radius: 8px;
+      padding: 12px 8px;
+      text-align: center;
+    }
+    .stat-value {
+      font-size: 18px;
+      font-weight: 700;
+      color: #1a1a1a;
+      line-height: 1.2;
+    }
+    .stat-label {
+      font-size: 10px;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-top: 4px;
+    }
+    .stat-note {
+      font-size: 13px;
+      color: #666;
+      margin-top: 6px;
+    }
+
+    /* ── Colors ── */
+    .pos { color: #16a34a; }
+    .neg { color: #dc2626; }
+
+    /* ── Movers table ── */
+    .movers-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .movers-table td {
+      padding: 9px 6px 9px 0;
+      vertical-align: top;
+      font-size: 14px;
+      border-bottom: 1px solid #f2f2f2;
+    }
+    .movers-table tr:last-child td { border-bottom: none; }
+    .col-ticker {
+      font-weight: 700;
+      font-size: 13px;
+      width: 52px;
+      color: #1a1a1a;
+      padding-right: 2px !important;
+    }
+    .col-change {
+      font-weight: 600;
+      font-size: 13px;
+      width: 72px;
+      white-space: nowrap;
+    }
+    .col-driver {
+      color: #444;
+      line-height: 1.5;
+    }
+
+    /* ── Key Insights list ── */
+    .insights-list {
+      list-style: none;
+    }
+    .insights-list li {
+      padding: 9px 0;
+      font-size: 15px;
+      line-height: 1.55;
+      border-bottom: 1px solid #f2f2f2;
+      color: #333;
+    }
+    .insights-list li:last-child { border-bottom: none; }
+    .ticker-tag {
+      font-weight: 700;
+      color: #2952cc;
+    }
+
+    /* ── News items ── */
+    .news-item {
+      padding: 16px 0;
+      border-bottom: 1px solid #efefef;
+    }
+    .news-item:last-child { border-bottom: none; }
+    .news-headline {
+      font-size: 18px;
+      font-weight: 700;
+      color: #1a1a1a;
+      margin-bottom: 8px;
+      line-height: 1.3;
+    }
+    .news-body {
+      font-size: 15px;
+      color: #333;
+      line-height: 1.6;
+    }
+    .news-body .why {
+      font-weight: 700;
+    }
+
+    /* ── Earnings ── */
+    .earnings-empty {
+      font-size: 15px;
+      color: #888;
+      font-style: italic;
+      padding: 4px 0 12px;
+    }
+
+    /* ── Thin rule between stories ── */
+    .thin-rule {
+      border: none;
+      border-top: 1px solid #e8e8e8;
+      margin: 0 36px;
+    }
+
+    /* ── Footer ── */
+    .footer {
+      background: #f8f8f8;
+      border-top: 1px solid #ebebeb;
+      padding: 20px 36px;
+      font-size: 12px;
+      color: #aaa;
+      text-align: center;
+      line-height: 1.8;
+    }
+    .footer a {
+      color: #2952cc;
+      text-decoration: none;
+    }
+    .footer a:hover { text-decoration: underline; }
+
+    @media (max-width: 600px) {
+      .wrapper { margin: 0; border-radius: 0; }
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+      .brand { font-size: 30px; }
+      .section { padding: 18px 20px; }
+      .divider { padding: 4px 20px; }
+      .intro { padding: 10px 20px 18px; }
+      .header { padding: 14px 20px 10px; }
+      .meta { padding: 16px 20px 0; }
+      .footer { padding: 16px 20px; }
+      .thin-rule { margin: 0 20px; }
+    }
+  </style>
+</head>
+<body>
+<div class="wrapper">
+
+  <!-- Published date -->
+  <div class="meta">Published on: March 8th, 2026</div>
+
+  <!-- Header -->
+  <div class="header">
+    <div class="brand">
+      <span class="brand-icon">📈</span> Portfolio Pulse
+    </div>
+    <div class="tagline">Read Less News</div>
+  </div>
+
+  <!-- Intro -->
+  <div class="intro">
+    <p><strong>Good Evening, Briefer!</strong> Here's your personalized portfolio digest for Sunday, March 8th — curated from 40 relevant articles across your 25 holdings.</p>
+    <p>Costco crushed earnings. Rocket Lab is finding post-earnings support. NVDA dipped but the AI demand thesis is very much intact. And Berkshire is back to buying its own stock for the first time in nearly two years. Here's what moved your portfolio today.</p>
+  </div>
+
+  <!-- Divider -->
+  <div class="divider">
+    <div class="divider-line"></div>
+    <div class="divider-circle">🤝</div>
+    <div class="divider-line"></div>
+  </div>
+
+  <!-- ── PORTFOLIO SNAPSHOT ── -->
+  <div class="section">
+    <div class="section-label">Your Portfolio</div>
+    <div class="section-title">Today's Snapshot</div>
+
+    <div class="stats-grid">
+      <div class="stat-box">
+        <div class="stat-value">$142,224</div>
+        <div class="stat-label">Est. Value</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value pos">+$1,114</div>
+        <div class="stat-label">Today's P&amp;L</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value pos">+$67,845</div>
+        <div class="stat-label">Total Gain</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value pos">+91.2%</div>
+        <div class="stat-label">Total Return</div>
+      </div>
+    </div>
+
+    <p class="stat-note">
+      🏆 <strong>Top Gainer:</strong> <span class="pos">COST (+3.1%)</span> &nbsp;·&nbsp;
+      📉 <strong>Top Loser:</strong> <span class="neg">NVDA (-1.5%)</span>
+      &nbsp;<span style="color:#bbb;">— 20 of 25 holdings with data today</span>
+    </p>
+  </div>
+
+  <!-- Divider -->
+  <div class="divider">
+    <div class="divider-line"></div>
+    <div class="divider-circle">📈</div>
+    <div class="divider-line"></div>
+  </div>
+
+  <!-- ── MOVERS & DRIVERS ── -->
+  <div class="section">
+    <div class="section-label">Market Movers</div>
+    <div class="section-title">What Moved Your Holdings Today</div>
+
+    <table class="movers-table">
+      <tr>
+        <td class="col-ticker">COST</td>
+        <td class="col-change pos">▲ +3.1%</td>
+        <td class="col-driver">Costco Wholesale shares rose following a better-than-expected earnings announcement, with reported EPS of $4.58 topping consensus estimates of $4.55.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">NET</td>
+        <td class="col-change pos">▲ +2.7%</td>
+        <td class="col-driver">Cloudflare's revenue climbed by 30% in 2025, including its largest-ever deal with an average annual contract value of $42.5 million.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">RKLB</td>
+        <td class="col-change pos">▲ +2.4%</td>
+        <td class="col-driver">Rocket Lab reported Q4 revenue of $180 million, representing 36% growth year-over-year, with full-year revenue of $602 million and a $1.85 billion backlog.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">NVDA</td>
+        <td class="col-change neg">▼ -1.5%</td>
+        <td class="col-driver">Nvidia's data center revenue for Q4 fiscal 2026 was $62.3 billion, a 75% year-over-year increase — despite the dip, AI demand fundamentals remain intact.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">AXON</td>
+        <td class="col-change pos">▲ +1.4%</td>
+        <td class="col-driver">Axon Enterprise reported $750 million of bookings in new AI products in the first full year since its AI Era Plan launch.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">CRWD</td>
+        <td class="col-change pos">▲ +1.1%</td>
+        <td class="col-driver">CrowdStrike was up 4.5% after Zacks Research upgraded the stock from a strong sell rating to a hold rating.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">T</td>
+        <td class="col-change neg">▼ -0.9%</td>
+        <td class="col-driver">AT&amp;T reported Q4 EPS of $0.52, exceeding analysts' consensus estimate of $0.46 by $0.06.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">JNJ</td>
+        <td class="col-change pos">▲ +0.8%</td>
+        <td class="col-driver">BofA analyst Jason Gerberry raised the price recommendation on Johnson &amp; Johnson to $253 from $227, reiterating a Neutral rating.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">AAPL</td>
+        <td class="col-change neg">▼ -0.7%</td>
+        <td class="col-driver">Apple unveiled new lower-cost models: the iPhone 17e starting at $599, the iPad Air at $599, and the MacBook Neo at $599.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">META</td>
+        <td class="col-change neg">▼ -0.7%</td>
+        <td class="col-driver">Meta Platforms fell amid broader selling pressure; COO insider sale noted but sub-$1M and not considered material.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">AMZN</td>
+        <td class="col-change neg">▼ -0.7%</td>
+        <td class="col-driver">Amazon's net income was up 31% in 2025 vs. 2024, with plans to spend $200 billion in total capex in 2026.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">GOOG</td>
+        <td class="col-change pos">▲ +0.7%</td>
+        <td class="col-driver">Alphabet's Q4 2025 revenue rose 18% year-over-year to $113.8 billion, with Google Cloud surging 48% YoY to $17.7 billion.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">O</td>
+        <td class="col-change pos">▲ +0.6%</td>
+        <td class="col-driver">Realty Income offers a 5% yield with a 98.9% occupancy rate, and could benefit from shifting 2026 rate cut expectations.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">KO</td>
+        <td class="col-change pos">▲ +0.5%</td>
+        <td class="col-driver">Coca-Cola reported a 2% increase in net revenues to $47.9 billion for full-year 2025, with organic revenues growing 5% year-over-year.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">TSLA</td>
+        <td class="col-change neg">▼ -0.4%</td>
+        <td class="col-driver">Tesla's Q4 revenue was $24.90 billion, beating analysts' expectations of $24.75 billion; Q4 EPS of $0.50 also topped estimates of $0.45.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">DKNG</td>
+        <td class="col-change neg">▼ -0.3%</td>
+        <td class="col-driver">BMO Capital Markets raised DraftKings' price target from $42.00 to $50.00, maintaining an outperform rating.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">BRK-A</td>
+        <td class="col-change pos">▲ +0.1%</td>
+        <td class="col-driver">Berkshire Hathaway resumed stock buybacks on March 5, 2026, after a nearly two-year pause under Greg Abel's new leadership.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">QQQ</td>
+        <td class="col-change neg">▼ -0.1%</td>
+        <td class="col-driver">Invesco QQQ's stock price was down 1.5% during mid-day trading on Friday, reflecting broader large-cap tech softness.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">SHOP</td>
+        <td class="col-change pos">▲ +0.1%</td>
+        <td class="col-driver">No specific driver identified today.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">VZ</td>
+        <td class="col-change pos">▲ +0.1%</td>
+        <td class="col-driver">Verizon reported Q4 2024 postpaid phone net additions of 568,000, a 26.5% year-over-year increase, and fixed wireless access revenue jumped 51.6% to $611 million.</td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- Divider -->
+  <div class="divider">
+    <div class="divider-line"></div>
+    <div class="divider-circle">💡</div>
+    <div class="divider-line"></div>
+  </div>
+
+  <!-- ── KEY MARKET INSIGHTS ── -->
+  <div class="section">
+    <div class="section-label">Key Insights</div>
+    <div class="section-title">What Matters for Your Holdings</div>
+
+    <ul class="insights-list">
+      <li><span class="ticker-tag">COST:</span> Costco Wholesale shares rose 1.6% following a better-than-expected earnings announcement, with reported EPS of $4.58 topping consensus estimates of $4.55.</li>
+      <li><span class="ticker-tag">COST:</span> BMO Capital Markets raised Costco Wholesale's price target from $1,175.00 to <strong>$1,315.00</strong>, maintaining an outperform rating.</li>
+      <li><span class="ticker-tag">NVDA:</span> Nvidia's data center revenue for Q4 fiscal 2026 was $62.3 billion, a 75% year-over-year increase.</li>
+      <li><span class="ticker-tag">GOOG:</span> Alphabet's Q4 2025 revenue rose 18% year-over-year to $113.8 billion, with Google Cloud revenue surging 48% YoY to $17.7 billion.</li>
+      <li><span class="ticker-tag">AMZN:</span> Amazon's 2025 revenue was $717 billion, and net income was up 31% year-over-year, with $200B capex planned for 2026.</li>
+      <li><span class="ticker-tag">JNJ:</span> BofA analyst Jason Gerberry raised the price recommendation on Johnson &amp; Johnson to <strong>$253 from $227</strong>, reiterating a Neutral rating.</li>
+      <li><span class="ticker-tag">T:</span> AT&amp;T reported Q4 EPS of $0.52, exceeding the $0.46 estimate, and Q4 revenue of $33.47 billion, surpassing analyst expectations of $32.91 billion.</li>
+      <li><span class="ticker-tag">VZ:</span> Verizon reported Q4 2024 postpaid phone net additions of 568,000 (+26.5% YoY), and fixed wireless access revenue jumped 51.6% to $611 million.</li>
+      <li><span class="ticker-tag">TSLA:</span> Tesla's Q4 revenue was $24.90 billion, beating expectations of $24.75 billion; Q4 EPS of $0.50 surpassed the consensus estimate of $0.45.</li>
+      <li><span class="ticker-tag">CRWD:</span> CrowdStrike was up 4.5% after Zacks Research upgraded the stock from a strong sell rating to a hold rating.</li>
+      <li><span class="ticker-tag">RKLB:</span> Rocket Lab reported Q4 revenue of $180 million (+36% YoY), full-year revenue of $602 million (+40% YoY), with its backlog climbing to $1.85 billion.</li>
+      <li><span class="ticker-tag">RKLB:</span> SVP Arjun Kampani sold <strong>$1,706,006</strong> worth of shares — a material insider transaction worth monitoring.</li>
+      <li><span class="ticker-tag">RKLB:</span> CEO Peter Beck sold <strong>$1,312,259</strong> worth of shares — second material insider sale this week at Rocket Lab.</li>
+      <li><span class="ticker-tag">AAPL:</span> Apple unveiled new lower-cost models — iPhone 17e at $599 (A19 chip, MagSafe), iPad Air at $599, and MacBook Neo at $599.</li>
+      <li><span class="ticker-tag">AXON:</span> Axon Enterprise reported $750 million of bookings in new AI products in its first full year of the AI Era Plan, plus $1 billion in international bookings during 2025.</li>
+    </ul>
+  </div>
+
+  <!-- Divider -->
+  <div class="divider">
+    <div class="divider-line"></div>
+    <div class="divider-circle">📅</div>
+    <div class="divider-line"></div>
+  </div>
+
+  <!-- ── UPCOMING EARNINGS ── -->
+  <div class="section">
+    <div class="section-label">Earnings Calendar</div>
+    <div class="section-title">Upcoming in Your Portfolio</div>
+    <p class="earnings-empty">No portfolio earnings events in the next 14 days. Next scheduled window begins late March.</p>
+  </div>
+
+  <!-- Divider -->
+  <div class="divider">
+    <div class="divider-line"></div>
+    <div class="divider-circle">📰</div>
+    <div class="divider-line"></div>
+  </div>
+
+  <!-- ── NEWS THAT MATTERED ── -->
+  <div class="section">
+    <div class="section-label">News That Mattered Today</div>
+    <div class="section-title">The Stories Behind the Moves</div>
+
+    <div class="news-item">
+      <p class="news-headline">DraftKings Price Target Raised to $50</p>
+      <p class="news-body">BMO Capital Markets raised DraftKings' price target from $42.00 to $50.00, maintaining an outperform rating. <span class="why">Why it matters:</span> A raised PT with a maintained outperform signals continued analyst conviction heading into March Madness — the most important sports betting period of the year for DKNG.</p>
+    </div>
+
+    <div class="news-item">
+      <p class="news-headline">Costco Shares Up 1.6% on Earnings Beat</p>
+      <p class="news-body">Costco Wholesale Corporation shares rose 1.6% following a better-than-expected earnings announcement, reporting $4.58 EPS for the quarter, topping analysts' consensus estimates of $4.55. <span class="why">Why it matters:</span> With revenue of $69.6B and BMO raising its price target to $1,315, the earnings beat confirms Costco's membership model is resilient despite macro headwinds — and the company is suing the federal government to recover tariff duties already paid.</p>
+    </div>
+
+    <div class="news-item">
+      <p class="news-headline">Is Amazon Stock a Long-Term Buy?</p>
+      <p class="news-body">Amazon is a power player in the AI race with plans to spend $200 billion in total capital expenditures in 2026. <span class="why">Why it matters:</span> $200B in capex positions AWS as the backbone of AI infrastructure — this is a long-term tailwind for AMZN, and at 29x earnings the stock is at a 10-year bargain valuation according to some analysts.</p>
+    </div>
+
+    <div class="news-item">
+      <p class="news-headline">Apple Unveils iPhone 17e — $599 Starting Price</p>
+      <p class="news-body">Apple unveiled the iPhone 17e with MagSafe charging, an A19 processor, and a 48MP Fusion camera, along with a refreshed iPad Air and a new MacBook Neo — all starting at $599. <span class="why">Why it matters:</span> A new entry-level iPhone at $599 directly targets price-sensitive markets and could expand Apple's addressable base, particularly in India where premium models face stiff competition.</p>
+    </div>
+
+    <div class="news-item">
+      <p class="news-headline">Alphabet's Cloud Backlog Hits $240 Billion</p>
+      <p class="news-body">Alphabet's cloud backlog swelled by 55% quarter over quarter to $240 billion, with Google Cloud revenue surging 48% year-over-year to $17.7 billion in Q4 2025. <span class="why">Why it matters:</span> A $240B backlog is a forward revenue visibility story — it means Google Cloud's hyper-growth has legs well into 2026 and 2027, making GOOG one of the clearest AI infrastructure plays in your portfolio.</p>
+    </div>
+
+    <div class="news-item">
+      <p class="news-headline">Rocket Lab CEO &amp; SVP Sell Combined $3M+ in Stock</p>
+      <p class="news-body">Rocket Lab Corporation CEO Peter Beck sold 18,857 shares for $1,312,258 and SVP Arjun Kampani sold 23,711 shares for $1,706,006 — both in the same week. <span class="why">Why it matters:</span> Two material insider sales totaling $3M+ from senior leadership following a strong earnings beat is worth monitoring. It doesn't necessarily signal a negative outlook, but the timing and combined scale is notable.</p>
+    </div>
+
+    <div class="news-item">
+      <p class="news-headline">Berkshire Resumes Buybacks — What Abel's Era Looks Like</p>
+      <p class="news-body">Berkshire Hathaway resumed stock buybacks on March 5, 2026, after a nearly two-year pause, and Greg Abel personally purchased $15 million worth of Class A shares. <span class="why">Why it matters:</span> Buyback resumption + a $15M personal buy from the new CEO is one of the strongest capital allocation signals possible. Abel is putting his money where his mouth is.</p>
+    </div>
+
+    <div class="news-item">
+      <p class="news-headline">AT&amp;T Beats Estimates — So Why Is the Stock Down?</p>
+      <p class="news-body">AT&amp;T Inc. reported $0.52 earnings per share for the quarter, topping the consensus estimate of $0.46 by $0.06, with revenue of $33.47 billion also beating expectations. <span class="why">Why it matters:</span> Beating EPS by 13% while the stock falls suggests results were already priced in — a classic "buy the rumor, sell the news" pattern. For long-term holders, a 5%+ dividend yield with improving fundamentals is a compelling hold.</p>
+    </div>
+
+    <div class="news-item">
+      <p class="news-headline">Flutter Is Down 48% YTD — What It Means for DKNG</p>
+      <p class="news-body">Flutter Entertainment, DraftKings' main international competitor, is down 48% year to date as of March 3rd. <span class="why">Why it matters:</span> Flutter's collapse could signal broader sports betting headwinds — or alternatively, a widening gap between DraftKings' U.S. market dominance and Flutter's international struggles. Worth watching as March Madness begins.</p>
+    </div>
+
+    <div class="news-item">
+      <p class="news-headline">META Stock Falls 1.1% — Insider Sale Not the Cause</p>
+      <p class="news-body">Meta Platforms' COO Javier Olivan sold 629 shares totaling ~$400K on March 2nd, while the stock fell 1.1% on the day. <span class="why">Why it matters:</span> The COO's ~$400K sale is immaterial — sub-$1M executive sales are routine diversification, not a signal. META's move is macro-driven. Contrast this with the CFO's $36.5M sale from last week, which is the insider transaction that actually warrants attention.</p>
+    </div>
+
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <p>You're receiving this because you're an early tester of Portfolio Pulse.</p>
+    <p>Powered by Gemini AI &nbsp;·&nbsp; News from NewsData.io &nbsp;·&nbsp; Prices from yfinance</p>
+    <p style="margin-top: 8px;">
+      <a href="#">Unsubscribe</a> &nbsp;·&nbsp;
+      <a href="#">Manage Preferences</a> &nbsp;·&nbsp;
+      <a href="#">View in Browser</a>
+    </p>
+    <p style="margin-top: 10px; font-size: 11px; color: #ccc;">
+      Portfolio Pulse is for informational purposes only. Nothing here constitutes financial advice.
+    </p>
+  </div>
+
+</div>
+</body>
+</html>

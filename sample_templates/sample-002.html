@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Your Daily Portfolio Brief — After Close</title>
+  <style>
+    /* ====== Base ====== */
+    :root {
+      --bg: #0b1020;
+      --card: #111832;
+      --muted: #8892a6;
+      --text: #e8edf7;
+      --accent: #5aa7ff;
+      --accent-2: #7bd389;
+      --danger: #ff6b6b;
+      --warning: #ffd166;
+      --chip: #1a2347;
+      --divider: #1c274f;
+      --shadow: 0 8px 24px rgba(0,0,0,0.35);
+      --radius: 14px;
+      --radius-sm: 10px;
+      --maxw: 640px;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(1200px 800px at 50% -10%, #1a2447 0%, #0b1020 60%);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .container {
+      max-width: var(--maxw);
+      padding: 24px 16px 64px;
+      margin: 0 auto;
+    }
+
+    /* ====== Header ====== */
+    .header {
+      background: linear-gradient(135deg, rgba(90,167,255,0.15), rgba(255,255,255,0.02));
+      border: 1px solid var(--divider);
+      border-radius: var(--radius);
+      padding: 20px 18px;
+      box-shadow: var(--shadow);
+      margin-top: 16px;
+    }
+    .brand {
+      display: flex; align-items: center; gap: 12px;
+    }
+    .logo {
+      width: 36px; height: 36px;
+      background: conic-gradient(from 120deg, #5aa7ff, #7bd389, #5aa7ff);
+      border-radius: 10px;
+      box-shadow: 0 6px 16px rgba(90,167,255,0.45);
+    }
+    h1 {
+      font-size: 1.25rem;
+      margin: 0;
+      letter-spacing: .3px;
+    }
+    .meta {
+      display: flex; gap: 10px; flex-wrap: wrap;
+      color: var(--muted);
+      font-size: .92rem;
+      margin-top: 6px;
+    }
+    .badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px;
+      background: var(--chip);
+      border: 1px solid var(--divider);
+      border-radius: 999px;
+      font-size: .85rem;
+      color: #c9d6ff;
+    }
+
+    /* ====== Section ====== */
+    .section {
+      margin-top: 28px;
+      background: linear-gradient(180deg, rgba(17,24,50,0.9), rgba(10,15,30,0.9));
+      border: 1px solid var(--divider);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .section > .title {
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--divider);
+      background: linear-gradient(180deg, rgba(17,24,50,0.75), rgba(17,24,50,0.3));
+      font-weight: 700;
+      letter-spacing: .2px;
+    }
+    .section .content { padding: 16px 18px; }
+
+    /* ====== Cards ====== */
+    .item {
+      padding: 14px;
+      border: 1px solid var(--divider);
+      background: rgba(6,10,24,0.35);
+      border-radius: var(--radius-sm);
+      margin-bottom: 14px;
+    }
+    .item h3 {
+      margin: 0 0 4px;
+      font-size: 1.02rem;
+    }
+    .muted { color: var(--muted); }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .sep { height: 1px; background: var(--divider); margin: 12px 0; border: 0; }
+
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chip {
+      padding: 3px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--divider);
+      background: var(--chip);
+      font-size: .82rem;
+    }
+
+    .confidence {
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: .82rem;
+      border: 1px solid var(--divider);
+      color: #dbe7ff;
+      background: linear-gradient(135deg, rgba(90,167,255,0.2), rgba(90,167,255,0.05));
+    }
+    .conf-high { background: linear-gradient(135deg, rgba(123,211,137,0.2), rgba(123,211,137,0.06)); }
+    .conf-med  { background: linear-gradient(135deg, rgba(255,209,102,0.22), rgba(255,209,102,0.06)); }
+    .conf-low  { background: linear-gradient(135deg, rgba(255,107,107,0.22), rgba(255,107,107,0.06)); }
+
+    /* ====== Movers Table ====== */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: .95rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 10px 8px;
+      border-bottom: 1px solid var(--divider);
+      vertical-align: top;
+    }
+    th { color: #c9d6ff; font-weight: 700; }
+    .pos { color: var(--accent-2); }
+    .neg { color: var(--danger); }
+
+    /* ====== Footer ====== */
+    .footer {
+      margin-top: 28px;
+      color: var(--muted);
+      font-size: .85rem;
+      text-align: center;
+    }
+
+    /* ====== Responsive ====== */
+    @media (max-width: 700px) {
+      .container { padding: 18px 12px 40px; }
+      .section .content { padding: 14px 14px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <!-- Header -->
+    <div class="header">
+      <div class="brand">
+        <div class="logo" aria-hidden="true"></div>
+        <div>
+          <h1>Your Daily Portfolio Brief — After Close</h1>
+          <div class="meta">
+            <span class="badge">Aug 15, 2025</span>
+            <span class="badge">Window: 9:30 AM → 4:00 PM ET</span>
+            <span class="badge">Confidence Shown for All Items</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Top 5 Headlines -->
+    <section class="section" id="top-5">
+      <div class="title">1⃣ Top 5 Headlines Impacting Your Holdings</div>
+      <div class="content">
+
+        <!-- Item 1 -->
+        <article class="item">
+          <h3><a href="#" target="_blank" rel="noopener">Fed holds rates; hints at Q4 easing</a></h3>
+          <div class="row">
+            <span class="confidence conf-med">Confidence: Medium</span>
+            <span class="muted">Source: Example News • 3:46 PM ET</span>
+          </div>
+          <hr class="sep"/>
+          <div><strong>TL;DR:</strong> The Fed left benchmark rates unchanged but signaled a possible cut next quarter.</div>
+          <div><strong>Why it matters:</strong> Easing tends to support growth/tech — helpful for AAPL, MSFT, NVDA in your portfolio.</div>
+          <div class="chips" style="margin-top:8px;">
+            <span class="chip">AAPL</span><span class="chip">MSFT</span><span class="chip">NVDA</span>
+          </div>
+        </article>
+
+        <!-- Item 2 -->
+        <article class="item">
+          <h3><a href="#" target="_blank" rel="noopener">Tesla beats EPS; supply chain improves</a></h3>
+          <div class="row">
+            <span class="confidence conf-high">Confidence: High</span>
+            <span class="muted">Source: Company Release • 2:05 PM ET</span>
+          </div>
+          <hr class="sep"/>
+          <div><strong>TL;DR:</strong> Q2 EPS outpaced estimates; smoother logistics cited as the key contributor.</div>
+          <div><strong>Why it matters:</strong> Eases margin volatility risk; supportive for TSLA’s near-term outlook.</div>
+          <div class="chips" style="margin-top:8px;">
+            <span class="chip">TSLA</span>
+          </div>
+        </article>
+
+        <!-- Item 3 -->
+        <article class="item">
+          <h3><a href="#" target="_blank" rel="noopener">AWS hiring push signals cloud demand</a></h3>
+          <div class="row">
+            <span class="confidence conf-high">Confidence: High</span>
+            <span class="muted">Source: TechWire • 1:18 PM ET</span>
+          </div>
+          <hr class="sep"/>
+          <div><strong>TL;DR:</strong> Amazon’s cloud arm to add 20,000 engineers worldwide.</div>
+          <div><strong>Why it matters:</strong> Reinforces enterprise cloud momentum — a tailwind for AMZN and MSFT.</div>
+          <div class="chips" style="margin-top:8px;">
+            <span class="chip">AMZN</span><span class="chip">MSFT</span>
+          </div>
+        </article>
+
+        <!-- Item 4 -->
+        <article class="item">
+          <h3><a href="#" target="_blank" rel="noopener">Asian chip demand shows signs of rebound</a></h3>
+          <div class="row">
+            <span class="confidence conf-med">Confidence: Medium</span>
+            <span class="muted">Source: Global Markets • 12:42 PM ET</span>
+          </div>
+          <hr class="sep"/>
+          <div><strong>TL;DR:</strong> Distributors in Asia report improved orders across data center and consumer chips.</div>
+          <div><strong>Why it matters:</strong> Upstream recovery can flow through to NVDA demand over the next quarters.</div>
+          <div class="chips" style="margin-top:8px;">
+            <span class="chip">NVDA</span>
+          </div>
+        </article>
+
+        <!-- Item 5 -->
+        <article class="item">
+          <h3><a href="#" target="_blank" rel="noopener">Meta pares metaverse spend; focuses on ad tech</a></h3>
+          <div class="row">
+            <span class="confidence conf-med">Confidence: Medium</span>
+            <span class="muted">Source: AdJournal • 10:03 AM ET</span>
+          </div>
+          <hr class="sep"/>
+          <div><strong>TL;DR:</strong> Budget shift favors core monetization workstreams.</div>
+          <div><strong>Why it matters:</strong> Potentially supports earnings quality; marginally positive for META.</div>
+          <div class="chips" style="margin-top:8px;">
+            <span class="chip">META</span>
+          </div>
+        </article>
+
+      </div>
+    </section>
+
+    <!-- Movers & Drivers -->
+    <section class="section" id="movers">
+      <div class="title">2⃣ Movers & Drivers (Today)</div>
+      <div class="content">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:18%;">Ticker</th>
+              <th style="width:18%;">Price Δ</th>
+              <th>Driver</th>
+              <th style="width:18%;">Confidence</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>TSLA</strong></td>
+              <td class="pos">▲ +10.0%</td>
+              <td>EPS beat; supply chain normalization</td>
+              <td>High</td>
+            </tr>
+            <tr>
+              <td><strong>NVDA</strong></td>
+              <td class="pos">▲ +5.1%</td>
+              <td>Lower-rate hopes after Fed decision</td>
+              <td>Medium</td>
+            </tr>
+            <tr>
+              <td><strong>AAPL</strong></td>
+              <td class="pos">▲ +2.0%</td>
+              <td>Tech risk-on; peers rally</td>
+              <td>Medium</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Sector Snapshot / World Watch -->
+    <section class="section" id="sector">
+      <div class="title">3⃣ Sector Snapshot / World Watch</div>
+      <div class="content">
+        <div class="item">
+          <div><strong>AI Infrastructure:</strong> Cloud providers indicate rising training workloads; potential uplift for hyperscaler suppliers.</div>
+        </div>
+        <div class="item">
+          <div><strong>Semiconductors:</strong> Asian order books firming; watch lead times into Q4.</div>
+        </div>
+        <div class="item">
+          <div><strong>Cybersecurity:</strong> Elevated breach activity keeps seat at the budget table; tailwinds for leaders.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Upcoming Events -->
+    <section class="section" id="events">
+      <div class="title">4⃣ Upcoming Events</div>
+      <div class="content">
+        <div class="item">
+          <div><strong>TSLA — Q3 Earnings (Tomorrow, 8:00 AM ET)</strong></div>
+          <div class="muted"><em>Why it matters:</em> Earnings and guidance can drive near‑term volatility for TSLA holders.</div>
+        </div>
+        <div class="item">
+          <div><strong>S&P Global Flash PMI (Fri, 9:45 AM ET)</strong></div>
+          <div class="muted"><em>Why it matters:</em> Weak PMI could weigh on growth stocks; stronger prints may support risk appetite.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Education Corner (quiet days only) -->
+    <section class="section" id="education">
+      <div class="title">💡 Education Corner (Shown on Quiet Days)</div>
+      <div class="content">
+        <div class="item">
+          <div><strong>What is a blackout window?</strong> Before earnings, many companies halt buybacks and insider trades. This can remove a supportive buyer from the market, sometimes adding to pre‑earnings volatility.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <div class="footer">
+      <p>Sources are illustrative. This brief is for informational purposes only and not investment advice.</p>
+      <p>© 2025 Your Company</p>
+    </div>
+
+  </div>
+</body>
+</html>
