@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Portfolio Pulse — March 10, 2026</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #f0f0f0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      color: #1a1a1a;
+      font-size: 16px;
+      line-height: 1.6;
+    }
+
+    .wrapper {
+      max-width: 640px;
+      margin: 24px auto;
+      background: #ffffff;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    /* ── Meta / Published ── */
+    .meta {
+      padding: 20px 36px 0;
+      font-size: 13px;
+      color: #999;
+    }
+
+    /* ── Header ── */
+    .header {
+      padding: 14px 36px 12px;
+    }
+    .brand {
+      font-size: 38px;
+      font-weight: 800;
+      letter-spacing: -1.5px;
+      line-height: 1.1;
+      color: #1a1a1a;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .brand-icon {
+      font-size: 34px;
+      line-height: 1;
+    }
+    .tagline {
+      font-size: 17px;
+      font-style: italic;
+      color: #666;
+      margin-top: 2px;
+      padding-left: 46px;
+    }
+
+    /* ── Intro ── */
+    .intro {
+      padding: 10px 36px 22px;
+      font-size: 16px;
+      line-height: 1.65;
+      color: #1a1a1a;
+    }
+    .intro p { margin-bottom: 12px; }
+    .intro p:last-child { margin-bottom: 0; }
+
+    /* ── Blue divider with icon ── */
+    .divider {
+      display: flex;
+      align-items: center;
+      padding: 4px 36px;
+    }
+    .divider-line {
+      flex: 1;
+      height: 2px;
+      background: #2952cc;
+    }
+    .divider-circle {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: 2px solid #2952cc;
+      background: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 10px;
+      font-size: 15px;
+      flex-shrink: 0;
+    }
+
+    /* ── Sections ── */
+    .section {
+      padding: 22px 36px;
+    }
+    .section-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 2.5px;
+      color: #2952cc;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+    .section-title {
+      font-size: 22px;
+      font-weight: 700;
+      color: #1a1a1a;
+      margin-bottom: 18px;
+      line-height: 1.25;
+    }
+
+    /* ── Portfolio snapshot stats ── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .stat-box {
+      background: #f5f7ff;
+      border-radius: 8px;
+      padding: 12px 8px;
+      text-align: center;
+    }
+    .stat-value {
+      font-size: 18px;
+      font-weight: 700;
+      color: #1a1a1a;
+      line-height: 1.2;
+    }
+    .stat-label {
+      font-size: 10px;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-top: 4px;
+    }
+    .stat-note {
+      font-size: 13px;
+      color: #666;
+      margin-top: 6px;
+    }
+
+    /* ── Colors ── */
+    .pos { color: #16a34a; }
+    .neg { color: #dc2626; }
+
+    /* ── Movers table ── */
+    .movers-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .movers-table td {
+      padding: 9px 6px 9px 0;
+      vertical-align: top;
+      font-size: 14px;
+      border-bottom: 1px solid #f2f2f2;
+    }
+    .movers-table tr:last-child td { border-bottom: none; }
+    .col-ticker {
+      font-weight: 700;
+      font-size: 13px;
+      width: 52px;
+      color: #1a1a1a;
+      padding-right: 2px !important;
+    }
+    .col-change {
+      font-weight: 600;
+      font-size: 13px;
+      width: 72px;
+      white-space: nowrap;
+    }
+    .col-driver {
+      color: #444;
+      line-height: 1.5;
+    }
+
+    /* ── Key Insights list ── */
+    .insights-list {
+      list-style: none;
+    }
+    .insights-list li {
+      padding: 9px 0;
+      font-size: 15px;
+      line-height: 1.55;
+      border-bottom: 1px solid #f2f2f2;
+      color: #333;
+    }
+    .insights-list li:last-child { border-bottom: none; }
+    .ticker-tag {
+      font-weight: 700;
+      color: #2952cc;
+    }
+
+    /* ── News items ── */
+    .news-item {
+      padding: 16px 0;
+      border-bottom: 1px solid #efefef;
+    }
+    .news-item:last-child { border-bottom: none; }
+    .news-headline {
+      font-size: 18px;
+      font-weight: 700;
+      color: #1a1a1a;
+      margin-bottom: 8px;
+      line-height: 1.3;
+    }
+    .news-body {
+      font-size: 15px;
+      color: #333;
+      line-height: 1.6;
+    }
+    .news-body .why {
+      font-weight: 700;
+    }
+
+    /* ── Earnings ── */
+    .earnings-empty {
+      font-size: 15px;
+      color: #888;
+      font-style: italic;
+      padding: 4px 0 12px;
+    }
+
+    /* ── Thin rule between stories ── */
+    .thin-rule {
+      border: none;
+      border-top: 1px solid #e8e8e8;
+      margin: 0 36px;
+    }
+
+    /* ── Footer ── */
+    .footer {
+      background: #f8f8f8;
+      border-top: 1px solid #ebebeb;
+      padding: 20px 36px;
+      font-size: 12px;
+      color: #aaa;
+      text-align: center;
+      line-height: 1.8;
+    }
+    .footer a {
+      color: #2952cc;
+      text-decoration: none;
+    }
+    .footer a:hover { text-decoration: underline; }
+
+    @media (max-width: 600px) {
+      .wrapper { margin: 0; border-radius: 0; }
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+      .brand { font-size: 30px; }
+      .section { padding: 18px 20px; }
+      .divider { padding: 4px 20px; }
+      .intro { padding: 10px 20px 18px; }
+      .header { padding: 14px 20px 10px; }
+      .meta { padding: 16px 20px 0; }
+      .footer { padding: 16px 20px; }
+      .thin-rule { margin: 0 20px; }
+    }
+  </style>
+</head>
+<body>
+<div class="wrapper">
+
+  <div class="meta">Published on: March 10, 2026</div>
+
+  <div class="header">
+    <div class="brand">
+      <span class="brand-icon">📈</span> Portfolio Pulse
+    </div>
+    <div class="tagline">Read Less News</div>
+  </div>
+
+  <div class="intro">
+    <p>Good Evening! Here&#x27;s your personalized portfolio digest for March 10, 2026 — curated from 40 relevant articles across your 25 holdings.</p>
+  </div>
+
+  <div class="divider">
+    <div class="divider-line"></div>
+    <div class="divider-circle">🤝</div>
+    <div class="divider-line"></div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Your Portfolio</div>
+    <div class="section-title">Today's Snapshot</div>
+    <div class="stats-grid">
+      <div class="stat-box">
+        <div class="stat-value">$143,664</div>
+        <div class="stat-label">Est. Value</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value pos">+$2,929</div>
+        <div class="stat-label">Today's P&amp;L</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value pos">+$69,285</div>
+        <div class="stat-label">Total Gain</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value pos">+93.2%</div>
+        <div class="stat-label">Total Return</div>
+      </div>
+    </div>
+    <p class="stat-note">
+      🏆 <strong>Top Gainer:</strong> <span class="pos">NET (+5.7%)</span> &nbsp;·&nbsp;
+      📉 <strong>Top Loser:</strong> <span class="neg">T (-1.4%)</span>
+      &nbsp;<span style="color:#bbb;">— 20 of 25 holdings with data today</span>
+    </p>
+  </div>
+
+  <div class="divider">
+    <div class="divider-line"></div>
+    <div class="divider-circle">📈</div>
+    <div class="divider-line"></div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Market Movers</div>
+    <div class="section-title">What Moved Your Holdings Today</div>
+
+    <table class="movers-table">
+      <tr>
+        <td class="col-ticker">NET</td>
+        <td class="col-change pos">▲ +5.7%</td>
+        <td class="col-driver">No specific driver identified today.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">SHOP</td>
+        <td class="col-change pos">▲ +4.9%</td>
+        <td class="col-driver">No specific driver identified today.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">RKLB</td>
+        <td class="col-change pos">▲ +4.0%</td>
+        <td class="col-driver">No specific driver identified today.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">GOOG</td>
+        <td class="col-change pos">▲ +3.6%</td>
+        <td class="col-driver">No specific driver identified today.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">NVDA</td>
+        <td class="col-change pos">▲ +2.9%</td>
+        <td class="col-driver">No specific driver identified today.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">TSLA</td>
+        <td class="col-change pos">▲ +2.7%</td>
+        <td class="col-driver">No specific driver identified today.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">QQQ</td>
+        <td class="col-change pos">▲ +2.1%</td>
+        <td class="col-driver">No specific driver identified today.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">DKNG</td>
+        <td class="col-change pos">▲ +1.9%</td>
+        <td class="col-driver">No specific driver identified today.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">KO</td>
+        <td class="col-change pos">▲ +1.6%</td>
+        <td class="col-driver">No specific driver identified today.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">META</td>
+        <td class="col-change pos">▲ +1.5%</td>
+        <td class="col-driver">No specific driver identified today.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">AAPL</td>
+        <td class="col-change pos">▲ +1.5%</td>
+        <td class="col-driver">No specific driver identified today.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">CRWD</td>
+        <td class="col-change pos">▲ +1.4%</td>
+        <td class="col-driver">No specific driver identified today.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">T</td>
+        <td class="col-change neg">▼ -1.4%</td>
+        <td class="col-driver">No specific driver identified today.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">O</td>
+        <td class="col-change pos">▲ +1.2%</td>
+        <td class="col-driver">No specific driver identified today.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">AXON</td>
+        <td class="col-change neg">▼ -1.2%</td>
+        <td class="col-driver">No specific driver identified today.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">JNJ</td>
+        <td class="col-change pos">▲ +1.1%</td>
+        <td class="col-driver">No specific driver identified today.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">AMZN</td>
+        <td class="col-change pos">▲ +1.1%</td>
+        <td class="col-driver">No specific driver identified today.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">COST</td>
+        <td class="col-change pos">▲ +0.5%</td>
+        <td class="col-driver">No specific driver identified today.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">BRK-A</td>
+        <td class="col-change pos">▲ +0.3%</td>
+        <td class="col-driver">No specific driver identified today.</td>
+      </tr>
+      <tr>
+        <td class="col-ticker">VZ</td>
+        <td class="col-change pos">▲ +0.1%</td>
+        <td class="col-driver">No specific driver identified today.</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="divider">
+    <div class="divider-line"></div>
+    <div class="divider-circle">💡</div>
+    <div class="divider-line"></div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Key Insights</div>
+    <div class="section-title">What Matters for Your Holdings</div>
+
+    <ul class="insights-list">
+      <li><span class="ticker-tag">T:</span> Q4 2025 adjusted EPS of $0.52 beat $0.47 estimate (10.64% beat), with revenue of $33.47B also surpassing expectations of $32.91B.</li>
+      <li><span class="ticker-tag">TSLA:</span> Reported Q4 EPS of $0.50 and revenue of $24.90B, both beating analyst estimates, though 2025 full-year revenue decreased 3% and net income fell 75% YoY.</li>
+      <li><span class="ticker-tag">COST:</span> BMO Capital Markets raised its price target from $1,175 to $1,315, and the company stated tariff refunds could lead to lower prices for customers.</li>
+      <li><span class="ticker-tag">DKNG:</span> BMO Capital Markets raised its price target to $50 from $42, while Director Harry Sloan bought $2.185 million worth of stock.</li>
+      <li><span class="ticker-tag">RKLB:</span> Reported strong FY2025 revenue of $602 million (up nearly 40% YoY), introduced silicon solar arrays for space-based data centers, but SVP Arjun Kampani sold $1.7 million in stock.</li>
+      <li><span class="ticker-tag">NVDA:</span> Fiscal Q4 2026 data center revenue surged 75% year-over-year to $62.3 billion, contributing to full-year revenue of $215.9 billion (up 65%) and $120 billion in net income.</li>
+      <li><span class="ticker-tag">GOOG:</span> Q4 2025 revenue grew 18% to $113.8 billion (full-year over $400B), with Google Cloud revenue surging 48% to $17.7 billion and its cloud backlog swelling to $240 billion.</li>
+      <li><span class="ticker-tag">AXON:</span> Reported $750 million in bookings for new AI products in the first year of its AI Era Plan, though President Joshua Isner sold $11.05 million worth of stock.</li>
+      <li><span class="ticker-tag">AMZN:</span> Plans to spend $200 billion in capital expenditures in 2026, with analysts estimating revenue to surpass $1 trillion by 2028 from $717 billion in 2025.</li>
+      <li><span class="ticker-tag">AAPL:</span> Unveiled a new low-cost iPhone 17e starting at $599, building on an active device installed base of over 2.5 billion and a cash buffer of almost $145 billion.</li>
+      <li><span class="ticker-tag">BRK-A:</span> Greg Abel officially took the helm, personally purchased $15 million in Class A shares, and the company resumed stock buybacks after a nearly two-year pause.</li>
+      <li><span class="ticker-tag">SHOP:</span> Moffett Nathanson upgraded its rating from &#x27;neutral&#x27; to &#x27;buy&#x27; with a $150 price target.</li>
+      <li><span class="ticker-tag">JNJ:</span> BofA analyst Jason Gerberry raised the price target to $253 from $227, reiterating a &#x27;Neutral&#x27; rating.</li>
+      <li><span class="ticker-tag">CRWD:</span> Zacks Research upgraded the stock from a &#x27;strong sell&#x27; rating to &#x27;hold&#x27;.</li>
+      <li><span class="ticker-tag">KO:</span> Reported full-year 2025 net revenues increased 2% to $47.9 billion, driven by 5% organic revenue growth.</li>
+    </ul>
+  </div>
+
+  <div class="divider">
+    <div class="divider-line"></div>
+    <div class="divider-circle">📅</div>
+    <div class="divider-line"></div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Earnings Calendar</div>
+    <div class="section-title">Upcoming in Your Portfolio</div>
+    <p class="earnings-empty">No portfolio earnings events in the next 14 days.</p>
+  </div>
+
+  <div class="divider">
+    <div class="divider-line"></div>
+    <div class="divider-circle">📰</div>
+    <div class="divider-line"></div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">News That Mattered Today</div>
+    <div class="section-title">The Stories Behind the Moves</div>
+
+    <div class="news-item">
+      <p class="news-headline">Costco Delivers Strong Earnings Beat</p>
+      <p class="news-body">Costco&#x27;s Q2 EPS of $4.58 beat estimates of $4.55, and revenue of $69.6 billion also surpassed expectations of $68.96 billion. <span class="why">Why it matters:</span> Beating both top and bottom lines signals robust consumer demand and strong operational execution, which is a bullish sign for continued stability and growth in your consumer retail exposure.</p>
+    </div>
+
+    <div class="news-item">
+      <p class="news-headline">DraftKings &amp; ESPN Team Up for March Madness</p>
+      <p class="news-body">DraftKings and ESPN are partnering to launch account linking and a &#x27;Bet Your Bracket&#x27; feature ahead of March Madness, integrating sports betting directly with sports content. <span class="why">Why it matters:</span> This strategic partnership leverages ESPN&#x27;s massive audience, potentially driving significant user acquisition and engagement for DraftKings during a peak sports betting period.</p>
+    </div>
+
+    <div class="news-item">
+      <p class="news-headline">AI Powerhouses Nvidia &amp; Alphabet Dominate Cloud &amp; Data Center Growth</p>
+      <p class="news-body">The latest reports highlight continued exceptional growth for both Nvidia and Alphabet in their respective AI-driven segments, with Nvidia&#x27;s data center revenue soaring and Google Cloud&#x27;s revenue and backlog expanding rapidly. <span class="why">Why it matters:</span> These results from two tech giants underscore the robust, broad-based growth in AI infrastructure and services, affirming that the AI boom is far from over and continues to be a major tailwind for tech portfolios.</p>
+    </div>
+
+    <div class="news-item">
+      <p class="news-headline">Rocket Lab Ventures into Space-Based Data Centers</p>
+      <p class="news-body">Rocket Lab introduced new silicon solar arrays designed for powering space-based data centers, expanding its offerings in the burgeoning space infrastructure market. <span class="why">Why it matters:</span> This strategic product launch positions Rocket Lab in a high-growth niche within the space economy, diversifying its revenue streams beyond launch services and potentially capturing significant future contracts.</p>
+    </div>
+
+    <div class="news-item">
+      <p class="news-headline">Cloudflare Sees Massive Q4 Deal, 30% Revenue Growth</p>
+      <p class="news-body">Cloudflare reported its largest deal ever by annual contract value in Q4 2025, averaging $42.5 million in revenue per year, contributing to its 30% revenue growth in 2025. <span class="why">Why it matters:</span> Landing a record-breaking deal highlights Cloudflare&#x27;s growing enterprise traction and ability to secure significant contracts, validating its market position and growth trajectory in cybersecurity and cloud services.</p>
+    </div>
+
+    <div class="news-item">
+      <p class="news-headline">Telecom Giants: Verizon Hikes Dividend, AT&amp;T Beats Estimates</p>
+      <p class="news-body">Verizon increased its quarterly dividend to $0.69 per share, while AT&amp;T reported strong Q4 results that surpassed analyst expectations for both EPS and revenue. <span class="why">Why it matters:</span> For dividend-focused investors, these updates from telecom stalwarts highlight potential income stability (VZ) and improved operational performance (T), suggesting these mature sectors are finding ways to deliver value.</p>
+    </div>
+
+    <div class="news-item">
+      <p class="news-headline">J&amp;J Price Target Raised by BofA on Pipeline Outlook</p>
+      <p class="news-body">BofA analyst Jason Gerberry raised Johnson &amp; Johnson&#x27;s price target to $253 from $227, reiterating a &#x27;Neutral&#x27; rating, citing an improving pipeline outlook. <span class="why">Why it matters:</span> An analyst upgrade with a higher price target suggests growing confidence in J&amp;J&#x27;s future product development and financial prospects, potentially signaling upside for shareholders.</p>
+    </div>
+
+    <div class="news-item">
+      <p class="news-headline">CrowdStrike Gets Upgrade from &#x27;Strong Sell&#x27; to &#x27;Hold&#x27;</p>
+      <p class="news-body">Zacks Research upgraded cybersecurity leader CrowdStrike from a &#x27;strong sell&#x27; rating to a &#x27;hold&#x27; rating, indicating a more cautious but less bearish stance on the stock. <span class="why">Why it matters:</span> While not a &#x27;buy&#x27; rating, moving from &#x27;strong sell&#x27; to &#x27;hold&#x27; is a significant sentiment shift that could alleviate selling pressure and attract new institutional interest as risks are perceived to be easing.</p>
+    </div>
+  </div>
+
+  <div class="footer">
+    <p>You're receiving this because you're an early tester of Portfolio Pulse.</p>
+    <p>Powered by Gemini AI &nbsp;·&nbsp; News from NewsData.io &nbsp;·&nbsp; Prices from yfinance</p>
+    <p style="margin-top: 8px;">
+      <a href="#">Unsubscribe</a> &nbsp;·&nbsp;
+      <a href="#">Manage Preferences</a> &nbsp;·&nbsp;
+      <a href="#">View in Browser</a>
+    </p>
+    <p style="margin-top: 10px; font-size: 11px; color: #ccc;">
+      Portfolio Pulse is for informational purposes only. Nothing here constitutes financial advice.
+    </p>
+  </div>
+
+</div>
+</body>
+</html>
