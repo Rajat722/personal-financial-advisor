@@ -47,6 +47,7 @@ pip install -r requirements.txt
 
 ### 3. Configure API keys
 
+Create a .env file if it doesn't exist.
 Copy `.env.example` to `.env` and fill in your keys:
 
 ```bash
