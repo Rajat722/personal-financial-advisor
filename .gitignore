@@ -42,4 +42,4 @@ chroma_store/
 *.tmp
 *.bak
 *.swp
-logs/* 
+logs/
