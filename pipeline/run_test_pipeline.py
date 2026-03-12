@@ -117,12 +117,22 @@ def _format_earnings_context(earnings: list[dict]) -> str:
 
 
 def format_article_blocks(articles: list) -> str:
-    """Format a list of article dicts into numbered text blocks for LLM prompts."""
+    """Format a list of article dicts into numbered text blocks for LLM prompts.
+
+    Includes publication date so the LLM can distinguish fresh vs. older articles
+    and avoid attributing stale facts to today's price movements.
+    """
     blocks = []
     for i, article in enumerate(articles):
         title = article['metadata'].get("title", f"Untitled Article {i+1}")
+        published = article['metadata'].get("published_iso", "unknown")
         text = article['text']
-        blocks.append(f"--- Article {i+1} ---\nTitle: {title}\nText: {text}\n")
+        blocks.append(
+            f"--- Article {i+1} ---\n"
+            f"Title: {title}\n"
+            f"Published: {published}\n"
+            f"Text: {text}\n"
+        )
     return "\n".join(blocks)
 
 
@@ -455,12 +465,16 @@ def run_pipeline() -> None:
     )
     logger.info("Generating editorial digest via Gemini flash...")
     try:
+        # Build portfolio ticker allowlist for editorial prompt
+        portfolio_ticker_list = ", ".join(e["ticker"] for e in portfolio["equities"])
+
         editorial_text = generate_editorial_digest(
             insights_json=insights_response,
             portfolio_snapshot=portfolio_summary,
             movers_table=movers_section,
             article_titles_urls=article_titles_urls,
             earnings_context=earnings_context,
+            portfolio_tickers=portfolio_ticker_list,
         )
         logger.info(f"Editorial digest generated ({len(editorial_text)} chars).")
         editorial_text = _cap_key_insights(editorial_text, limit=15)

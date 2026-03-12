@@ -1,6 +1,7 @@
 # relevance_filter.py
 
 import json
+from datetime import datetime, timezone, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -139,17 +140,28 @@ def _dedupe_by_title_similarity(articles: list, threshold: float = 0.85) -> list
 
 
 # --- Retrieve relevant articles from the articles collection ---
-def find_relevant_articles_from_context() -> list:
+def find_relevant_articles_from_context(max_age_hours: int = 36) -> list:
     """Return all articles whose embeddings match the portfolio above the similarity threshold.
 
+    Only considers articles published within the last max_age_hours (default 36h).
     Logs article title, best matching portfolio term, and similarity score for debugging.
     """
     article_collection = get_article_collection()
-    all_articles = article_collection.get(include=["documents", "embeddings", "metadatas"])
+
+    # Time-window: only consider articles published within max_age_hours.
+    # Every article has published_ts (int Unix timestamp) in metadata.
+    cutoff_ts = int((datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).timestamp())
+    all_articles = article_collection.get(
+        where={"published_ts": {"$gte": cutoff_ts}},
+        include=["documents", "embeddings", "metadatas"],
+    )
 
     relevant_articles = []
 
     article_ids = all_articles.get("ids", [])
+    total_in_store = article_collection.count()
+    log.info(f"Time filter: {len(article_ids)} articles within last {max_age_hours}h (of {total_in_store} total in store)")
+
     article_texts = all_articles.get("documents", [])
     article_metadatas = all_articles.get("metadatas", [])
     article_embeddings = all_articles.get("embeddings", [])

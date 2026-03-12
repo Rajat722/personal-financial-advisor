@@ -124,6 +124,22 @@ def _fetch_all_articles(queries: list[tuple[str, str]]) -> list[dict]:
 def ingest_daily_news() -> int:
     """Fetch, embed, and store today's finance articles. Returns count of stored articles."""
     portfolio = _load_portfolio()
+
+    # --- Cleanup: remove articles older than 7 days ---
+    try:
+        from datetime import datetime, timezone, timedelta
+        cutoff_ts = int((datetime.now(timezone.utc) - timedelta(days=7)).timestamp())
+        col = get_article_collection()
+        old_articles = col.get(where={"published_ts": {"$lt": cutoff_ts}})
+        old_ids = old_articles.get("ids", [])
+        if old_ids:
+            col.delete(ids=old_ids)
+            log.info(f"Cleanup: removed {len(old_ids)} articles older than 7 days.")
+        else:
+            log.info("Cleanup: no stale articles to remove.")
+    except Exception as e:
+        log.warning(f"Cleanup failed (non-fatal): {e}")
+
     equities = portfolio.get("equities", [])
     portfolio_tickers = [e["ticker"].upper() for e in equities]
     portfolio_sectors = [s.lower() for s in portfolio.get("sectors", [])]

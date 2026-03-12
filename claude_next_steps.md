@@ -1,326 +1,275 @@
-# Fix: Movers Table JSON Parsing + HTML Email Template Generation
+# Data Freshness Fix: Time-Window Articles + Portfolio Ticker Allowlist
 
-Read `CLAUDE.md` first. This prompt has two tasks:
-1. Fix the Movers & Drivers table regression (all 20 tickers showing "No specific driver identified today")
-2. Build an HTML email renderer that converts the pipeline's markdown digest into the `Portfolio Pulse` HTML email template
+Read `CLAUDE.md` first, then read this entire prompt before making any changes.
 
 ---
 
-## Task 1: Fix Movers Table JSON Parse Failure
+## Why This Change
 
-### The Problem
+The pipeline has a fundamental data quality problem: `find_relevant_articles_from_context()` in `model/relevance_filter.py` calls `article_collection.get()` which returns **every article ever stored in ChromaDB** — no date filter, no recency preference. Articles from 5 days ago and articles from today are treated identically, ranked only by embedding similarity.
 
-After the architecture refactor (3 calls → 2), the Movers & Drivers table shows "No specific driver identified today." for every ticker. The root cause: Call 1 (gemini-2.5-flash-lite) returns ~26K chars of insights JSON, and occasionally one entry has malformed JSON — e.g., a missing `"insight":` key name. When this happens, `json.loads()` fails on the entire response, the `except Exception: pass` in `_build_movers_section()` silently swallows the error, `ticker_drivers` stays empty, and all 20 tickers get the fallback text.
+This causes three concrete bugs visible in recent digests:
 
-This is a **critical regression** — the Movers table is the first data section users see and it's completely empty.
+1. **Stale facts presented as today's news.** The March 11 digest attributed "Elon Musk predicted 10 billion humanoid robots by 2040" to NVDA — this was from an old Tesla/AI article that matched NVDA by embedding similarity. It's days-old, and the attribution is wrong.
 
-### The Fix — `pipeline/run_test_pipeline.py`
+2. **The LLM correlates old news with today's prices.** Call 1 receives 40 articles (many from prior days) plus today's OHLCV data and is asked to correlate them. RKLB was top gainer (+2.8%) but its Movers driver said "shares dropped 3.6%" — from a days-old article about a different day's price action. The model is being asked to do something logically impossible.
 
-Modify `_build_movers_section()` with two changes:
+3. **Article slots wasted on old content.** The 40-article cap means stale articles with high similarity scores crowd out today's fresh articles.
 
-**Change 1: Add logging to the except block.** Replace `except Exception: pass` with:
+Every article already has `published_ts` (integer Unix timestamp) stored in its ChromaDB metadata. The fix is straightforward.
 
+---
+
+## Task 1: Time-Window the Relevance Filter
+
+**File:** `model/relevance_filter.py`
+
+**Change:** Modify `find_relevant_articles_from_context()` to only consider articles published within the last 36 hours. 36 hours (not 24) gives buffer for articles published late evening that are still market-relevant the next morning.
+
+Add `max_age_hours` as a parameter with default 36. Add the needed imports at the top of the file.
+
+**Current code (line 147-148):**
 ```python
-except Exception as e:
-    logger.warning(f"Failed to parse insights JSON for movers table: {e}")
+article_collection = get_article_collection()
+all_articles = article_collection.get(include=["documents", "embeddings", "metadatas"])
 ```
 
-**Change 2: Add a regex fallback extractor.** When `json.loads()` fails, fall back to extracting ticker/insight pairs directly from the raw JSON text using regex. The insights JSON has a predictable structure where each insight object contains `"ticker": "XXX"` and `"insight": "YYY"` fields. Even when one entry is malformed, the other 19+ entries still have valid field patterns.
-
-Here is the complete replacement for the JSON parsing block inside `_build_movers_section()`. Replace everything from `ticker_drivers: dict[str, str] = {}` through the end of the `except` block:
-
+**New code:**
 ```python
-    # Parse insights JSON → best driver string per ticker (first insight = highest quality)
-    ticker_drivers: dict[str, str] = {}
-    raw = insights_response.strip()
-    if raw.startswith("```"):
-        raw = re.sub(r"^```[^\n]*\n?", "", raw)
-        raw = re.sub(r"\n?```$", "", raw.strip())
+article_collection = get_article_collection()
 
-    # Primary path: parse full JSON
-    try:
-        for item in json.loads(raw).get("insights", []):
-            t = item.get("ticker", "")
-            if t and t not in ticker_drivers and item.get("insight"):
-                ticker_drivers[t] = _truncate_at_sentence(item["insight"], limit=200)
-    except Exception as e:
-        logger.warning(f"JSON parse failed for movers drivers ({e}). Falling back to regex extraction.")
-        # Fallback: extract "ticker"/"insight" pairs via regex from the raw text.
-        # This recovers valid entries even when one malformed entry breaks json.loads().
-        pattern = re.compile(
-            r'"ticker"\s*:\s*"([^"]+)"'    # capture ticker value
-            r'.*?'                           # non-greedy skip
-            r'"insight"\s*:\s*"([^"]+)"',   # capture insight value
-            re.DOTALL,
+# Time-window: only consider articles published within max_age_hours.
+# Every article has published_ts (int Unix timestamp) in metadata.
+cutoff_ts = int((datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).timestamp())
+all_articles = article_collection.get(
+    where={"published_ts": {"$gte": cutoff_ts}},
+    include=["documents", "embeddings", "metadatas"],
+)
+```
+
+Update the function signature to accept the time window:
+```python
+def find_relevant_articles_from_context(max_age_hours: int = 36) -> list:
+```
+
+Add the imports at the top of `relevance_filter.py` (add to existing imports):
+```python
+from datetime import datetime, timezone, timedelta
+```
+
+**Also add logging** so you can see how the time filter affects article count:
+```python
+total_in_store = article_collection.count()
+log.info(f"Time filter: {len(article_ids)} articles within last {max_age_hours}h (of {total_in_store} total in store)")
+```
+
+Place this log line right after the `article_ids = all_articles.get("ids", [])` line.
+
+**Important:** The `where` clause on `.get()` is a ChromaDB feature — it filters by metadata fields before returning results. This is different from `.query()` (which searches by embedding). We want `.get()` with `where` because we still need to do our own similarity comparison against the portfolio embeddings afterwards.
+
+---
+
+## Task 2: Include Publication Date in Article Blocks Sent to LLM
+
+**File:** `pipeline/run_test_pipeline.py`
+
+**Change:** Modify `format_article_blocks()` to include the article's publication date. This lets Call 1 distinguish between a March 7 COST earnings article and a March 11 COST tariff article, and prevents the LLM from treating all articles as "today's news."
+
+**Current code (lines 119-126):**
+```python
+def format_article_blocks(articles: list) -> str:
+    """Format a list of article dicts into numbered text blocks for LLM prompts."""
+    blocks = []
+    for i, article in enumerate(articles):
+        title = article['metadata'].get("title", f"Untitled Article {i+1}")
+        text = article['text']
+        blocks.append(f"--- Article {i+1} ---\nTitle: {title}\nText: {text}\n")
+    return "\n".join(blocks)
+```
+
+**New code:**
+```python
+def format_article_blocks(articles: list) -> str:
+    """Format a list of article dicts into numbered text blocks for LLM prompts.
+
+    Includes publication date so the LLM can distinguish fresh vs. older articles
+    and avoid attributing stale facts to today's price movements.
+    """
+    blocks = []
+    for i, article in enumerate(articles):
+        title = article['metadata'].get("title", f"Untitled Article {i+1}")
+        published = article['metadata'].get("published_iso", "unknown")
+        text = article['text']
+        blocks.append(
+            f"--- Article {i+1} ---\n"
+            f"Title: {title}\n"
+            f"Published: {published}\n"
+            f"Text: {text}\n"
         )
-        for match in pattern.finditer(raw):
-            t, insight = match.group(1).strip(), match.group(2).strip()
-            if t and insight and t not in ticker_drivers:
-                ticker_drivers[t] = _truncate_at_sentence(insight, limit=200)
-        logger.info(f"Regex fallback recovered drivers for {len(ticker_drivers)} tickers.")
+    return "\n".join(blocks)
 ```
-
-**Do NOT change anything else in `_build_movers_section()`** — the sorting logic, arrow rendering, and table formatting are all correct.
-
-### Validation for Task 1
-
-Run the pipeline:
-```bash
-python pipeline/run_test_pipeline.py
-```
-
-Check the digest output in `logs/digests/`. The Movers & Drivers table should have real driver text for most or all tickers — not "No specific driver identified today." everywhere.
-
-If you want to test the fallback specifically, you can temporarily corrupt one entry in the insights JSON before it reaches `_build_movers_section()` — but this isn't required. The primary path (`json.loads()`) will work on most runs. The fallback is insurance for the ~10-20% of runs where flash-lite produces one malformed entry.
 
 ---
 
-## Task 2: HTML Email Template Renderer
+## Task 3: Add Portfolio Ticker Allowlist to Editorial Prompt
 
-### What We're Building
+**File:** `model/model.py`
 
-A Python function that takes the pipeline's markdown digest output and renders it into the `Portfolio Pulse` HTML email template. The template design already exists in `sample_templates/digest_2026-03-08.html` — the goal is to programmatically generate that same HTML from pipeline data.
+**Problem (P1 from dev log):** Non-portfolio tickers (MU, AMAT) appeared in Key Insights because Call 1 extracted insights for tickers mentioned in articles that passed relevance filtering (e.g., an "AI trade" article mentioning MU and AMAT passed because it matched QQQ embeddings). The editorial prompt says "Do NOT mention tickers not in insights data" — but the insights data itself now contains non-portfolio tickers.
 
-### Where It Goes
+**Fix:** Pass the portfolio ticker list to the editorial prompt and add a hard allowlist rule.
 
-Create a new file: `pipeline/html_renderer.py`
-
-This file exports one function:
+**Step 3a:** Update `build_editorial_prompt()` signature to accept a ticker list. Add a new parameter:
 
 ```python
-def render_digest_html(
-    portfolio_snapshot: dict,
-    movers: list[dict],
-    key_insights: list[dict],
-    earnings_text: str,
-    news_stories: list[dict],
-    date_str: str,
-    article_count: int,
-    holdings_count: int,
+def build_editorial_prompt(
+    insights_json: str,
+    portfolio_snapshot: str,
+    movers_table: str,
+    article_titles_urls: str,
+    earnings_context: str = "",
+    portfolio_tickers: str = "",
 ) -> str:
 ```
 
-It returns a complete HTML string (the full `<!DOCTYPE html>` to `</html>`) ready to be saved as a `.html` file or sent via email.
-
-### The HTML Structure
-
-Use the **exact CSS and HTML structure** from `sample_templates/digest_2026-03-08.html`. Copy the entire `<style>` block verbatim — do not modify any CSS. The HTML structure is:
+**Step 3b:** Add this rule to the `=== STRICT RULES ===` section of the editorial prompt, right after the existing "Do NOT mention any ticker not present in the insights data" line:
 
 ```
-1. <div class="meta"> — "Published on: {date}"
-2. <div class="header"> — Brand + tagline (static)
-3. <div class="intro"> — Greeting + 2-sentence summary (skip for now — hardcode a generic greeting)
-4. Divider (🤝)
-5. Portfolio Snapshot section — stats grid + top gainer/loser
-6. Divider (📈)
-7. Movers & Drivers section — table rows
-8. Divider (💡)
-9. Key Market Insights section — <ul> list with ticker tags
-10. Divider (📅)
-11. Upcoming Earnings section
-12. Divider (📰)
-13. News That Mattered section — headline + body + "Why it matters" spans
-14. Footer (static)
+- PORTFOLIO TICKER ALLOWLIST: You may ONLY mention the following tickers. Any ticker not in this list must be completely excluded from Key Insights, News That Mattered, and all other sections — even if it appears in the analyst insights JSON. Non-portfolio tickers sometimes leak into insights via cross-article contamination.
+  ALLOWED TICKERS: {portfolio_tickers}
 ```
 
-### Input Data Format
-
-The renderer receives pre-parsed structured data, NOT raw markdown. The pipeline (`run_test_pipeline.py`) will parse the markdown digest into these structures before calling the renderer.
-
-**`portfolio_snapshot: dict`** — Parsed from the `## Portfolio Snapshot` section:
-```python
-{
-    "est_value": "$143,664",
-    "day_pnl": "+$2,929",
-    "day_pnl_positive": True,
-    "total_gain": "+$69,285",
-    "total_gain_positive": True,
-    "total_return": "+93.2%",
-    "total_return_positive": True,
-    "top_gainer": "NET (+5.7%)",
-    "top_loser": "T (-1.4%)",
-    "holdings_with_data": 20,
-    "total_holdings": 25,
-}
-```
-
-**`movers: list[dict]`** — Parsed from the `## Movers & Drivers` table:
-```python
-[
-    {"ticker": "NET", "change": "▲ +5.7%", "positive": True, "driver": "Cloudflare's revenue climbed..."},
-    {"ticker": "T", "change": "▼ -1.4%", "positive": False, "driver": "AT&T reported Q4 EPS..."},
-    ...
-]
-```
-
-**`key_insights: list[dict]`** — Parsed from the `Key Market Insights` section:
-```python
-[
-    {"ticker": "T", "text": "Q4 2025 adjusted EPS of $0.52 beat $0.47 estimate..."},
-    {"ticker": "TSLA", "text": "Reported Q4 EPS of $0.50 and revenue of $24.90B..."},
-    ...
-]
-```
-
-**`earnings_text: str`** — The raw earnings text (either event list or "No portfolio earnings events in the next 14 days.")
-
-**`news_stories: list[dict]`** — Parsed from the `News That Mattered Today` section:
-```python
-[
-    {
-        "headline": "Costco Delivers Strong Earnings Beat",
-        "body": "Costco's Q2 EPS of $4.58 beat estimates of $4.55...",
-        "why_it_matters": "Beating both top and bottom lines signals robust consumer demand..."
-    },
-    ...
-]
-```
-
-**`date_str: str`** — e.g., "March 10, 2026"
-
-**`article_count: int`** — Number of relevant articles used (for intro text)
-
-**`holdings_count: int`** — Total portfolio holdings (for intro text)
-
-### HTML Rendering Rules
-
-For each section, generate the HTML using the same class names and structure as the sample template:
-
-**Portfolio Snapshot:** Use the `stats-grid` with 4 `stat-box` divs. Apply `class="pos"` or `class="neg"` to the `stat-value` based on the `_positive` boolean fields. Render the top gainer/loser in the `stat-note` paragraph.
-
-**Movers Table:** Render as `<table class="movers-table">` with `<tr>` rows. Apply `class="col-change pos"` or `class="col-change neg"` based on the `positive` field. Use `html.escape()` on all text content (driver text may contain `&`, `<`, etc.).
-
-**Key Insights:** Render as `<ul class="insights-list">` with `<li>` items. Wrap the ticker prefix in `<span class="ticker-tag">TICKER:</span>`.
-
-**Earnings:** If the text is "No portfolio earnings..." render it in `<p class="earnings-empty">`. Otherwise, render the events (this can be a simple `<p>` for now since earnings are rarely in the window).
-
-**News Stories:** Render each as a `<div class="news-item">` containing:
-- `<p class="news-headline">{headline}</p>`
-- `<p class="news-body">{body} <span class="why">Why it matters:</span> {why_it_matters}</p>`
-
-**Intro paragraph:** For now, hardcode a generic greeting:
-```
-Good Evening! Here's your personalized portfolio digest for {date_str} — curated from {article_count} relevant articles across your {holdings_count} holdings.
-```
-
-**Footer:** Static HTML — copy verbatim from the sample template.
-
-**Dividers:** Use the same divider HTML between sections (blue lines with circle emoji). Copy the exact HTML from the template.
-
-**Important:** Use `html.escape()` from the `html` module on ALL dynamic text content before inserting into the HTML. This prevents broken rendering when article text contains `&`, `<`, `>`, or quotes. Do NOT escape the static HTML structure itself.
-
-### Parsing the Markdown Digest
-
-Add a parser function in the same file that extracts structured data from the pipeline's markdown output:
+**Step 3c:** Update `generate_editorial_digest()` to accept and pass through the ticker list:
 
 ```python
-def parse_digest_markdown(
-    portfolio_summary_md: str,
-    movers_md: str,
-    editorial_md: str,
-) -> dict:
-```
-
-This takes the three sections that `run_test_pipeline.py` already computes separately (portfolio_summary, movers_section, editorial_text) and parses them into the structured dicts described above.
-
-**Parsing the Portfolio Snapshot (`portfolio_summary_md`):**
-The format is predictable because `_build_portfolio_summary()` generates it:
-```
-## Portfolio Snapshot
-**Est. Value:** $143,664  |  **Today's P&L:** +$2,929  |  **Total Gain:** +$69,285 (+93.2%)
-**Top Gainer:** NET (+5.7%)  |  **Top Loser:** T (-1.4%)
-_(Based on 20 of 25 holdings with today's data)_
-```
-Use regex to extract each value. The `+` or `-` prefix determines positive/negative styling.
-
-**Parsing the Movers table (`movers_md`):**
-The format is a markdown table generated by `_build_movers_section()`:
-```
-| **COST** | ▲ +3.1% | Costco Wholesale shares rose... |
-```
-Parse each row. `▲` means positive, `▼` means negative.
-
-**Parsing the editorial text (`editorial_md`):**
-This is the output from Call 2 (the editorial model). It has three sections:
-
-1. `Key Market Insights` — bullet list starting with `- TICKER:`. Parse each line into `{"ticker": ..., "text": ...}`.
-
-2. `Upcoming Earnings (your portfolio)` — capture everything between this header and the next section. Store as raw text.
-
-3. `News That Mattered Today` — each story has a `**Bold Headline**` line, followed by body text, followed by `**Why it matters:**` text. Parse each story into `{"headline": ..., "body": ..., "why_it_matters": ...}`.
-
-The editorial output format may vary slightly between runs (the LLM sometimes uses slightly different formatting). Make the parsers tolerant — use `re.DOTALL` and `re.IGNORECASE` where appropriate, and handle missing fields gracefully (e.g., if a news story has no "Why it matters" line, use an empty string).
-
-### Wiring Into the Pipeline — `pipeline/run_test_pipeline.py`
-
-At the end of the pipeline (after `save_eod_digest(full_digest)`), add a call to render and save the HTML:
-
-```python
-from pipeline.html_renderer import parse_digest_markdown, render_digest_html
-
-# ... after save_eod_digest(full_digest) ...
-
-# === Step 10: Render HTML email ===
-logger.info("Rendering HTML email template...")
-try:
-    parsed = parse_digest_markdown(portfolio_summary, movers_section, editorial_text)
-    date_display = datetime.now(_EST).strftime("%B %d, %Y")  # e.g., "March 10, 2026"
-    html_output = render_digest_html(
-        portfolio_snapshot=parsed["portfolio_snapshot"],
-        movers=parsed["movers"],
-        key_insights=parsed["key_insights"],
-        earnings_text=parsed["earnings_text"],
-        news_stories=parsed["news_stories"],
-        date_str=date_display,
-        article_count=len(relevant_articles),
-        holdings_count=len(portfolio["equities"]),
+@gemini_retry(max_attempts=settings.GEMINI_RETRY_ATTEMPTS, base_delay=settings.GEMINI_RETRY_DELAY)
+def generate_editorial_digest(
+    insights_json: str,
+    portfolio_snapshot: str,
+    movers_table: str,
+    article_titles_urls: str,
+    earnings_context: str = "",
+    portfolio_tickers: str = "",
+) -> str:
+    """Generate the editorial newsletter via Gemini flash (Call 2)."""
+    prompt = build_editorial_prompt(
+        insights_json, portfolio_snapshot, movers_table, article_titles_urls,
+        earnings_context, portfolio_tickers,
     )
-    html_path = _DIR_DIGESTS / f"digest_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}_{_log_ts()}.html"
-    with open(html_path, "w", encoding="utf-8") as f:
-        f.write(html_output)
-    logger.info(f"HTML email saved: {html_path}")
-except Exception as e:
-    logger.error(f"Failed to render HTML email: {e}")
+    return _generate(prompt, model=settings.GEMINI_EDITORIAL_MODEL)
 ```
 
-### What NOT to Change
+**Step 3d:** Update the call site in `pipeline/run_test_pipeline.py` (around line 458) to pass the ticker list:
 
-- **Do NOT modify the CSS** in the template. Copy it exactly as-is from `sample_templates/digest_2026-03-08.html`.
-- **Do NOT modify any existing pipeline functions** (except `_build_movers_section()` for the JSON fix in Task 1).
-- **Do NOT modify `model/model.py`** — the LLM calls are not changing.
-- **Do NOT modify any noise filter patterns.**
-- **Do NOT modify `model/relevance_filter.py`.**
-- **Do NOT add new LLM calls.** The intro paragraph is hardcoded for now, not LLM-generated.
+```python
+    # Build portfolio ticker allowlist for editorial prompt
+    portfolio_ticker_list = ", ".join(e["ticker"] for e in portfolio["equities"])
+
+    editorial_text = generate_editorial_digest(
+        insights_json=insights_response,
+        portfolio_snapshot=portfolio_summary,
+        movers_table=movers_section,
+        article_titles_urls=article_titles_urls,
+        earnings_context=earnings_context,
+        portfolio_tickers=portfolio_ticker_list,
+    )
+```
+
+---
+
+## Task 4: Add ChromaDB Stale Article Cleanup to Ingestion Pipeline
+
+**File:** `news/news_ingest_pipeline.py`
+
+**Change:** Add a cleanup step at the start of `ingest_daily_news()` that deletes articles older than 7 days. This prevents the ever-growing archive problem and keeps ChromaDB fast.
+
+Add this right after the `portfolio = _load_portfolio()` line (around line 126), before the query building:
+
+```python
+    # --- Cleanup: remove articles older than 7 days ---
+    try:
+        from datetime import datetime, timezone, timedelta
+        cutoff_ts = int((datetime.now(timezone.utc) - timedelta(days=7)).timestamp())
+        col = get_article_collection()
+        old_articles = col.get(where={"published_ts": {"$lt": cutoff_ts}})
+        old_ids = old_articles.get("ids", [])
+        if old_ids:
+            col.delete(ids=old_ids)
+            log.info(f"Cleanup: removed {len(old_ids)} articles older than 7 days.")
+        else:
+            log.info("Cleanup: no stale articles to remove.")
+    except Exception as e:
+        log.warning(f"Cleanup failed (non-fatal): {e}")
+```
+
+This is defensive — if it fails, ingestion continues normally. The `$lt` operator is the opposite of the `$gte` used in the relevance filter.
+
+---
+
+## Task 5: Update `build_insight_prompt()` with Date Awareness
+
+**File:** `model/model.py`
+
+**Change:** Now that article blocks include a `Published:` date, update the insight prompt's STRICT RULES to tell Call 1 to be aware of article dates. Add this rule to the existing `build_insight_prompt()` STRICT RULES block:
+
+```
+- TEMPORAL AWARENESS: Each article includes a "Published:" date. When correlating articles with today's price data, strongly prefer articles published within the last 24 hours. If an article is older than 2 days, note the publish date in the "support" field and mark the insight as potentially stale. Do NOT attribute price movements today to articles published 3+ days ago — the market has already priced in that information.
+```
+
+Add this as a new bullet in the existing STRICT RULES list, right after the QUALITY THRESHOLD rule. Do NOT remove or modify any existing rules.
+
+---
+
+## What NOT to Change
+
+- **Do NOT modify `news/noise_filter.py`** — no regex pattern changes.
+- **Do NOT modify `pipeline/html_renderer.py`** — HTML rendering is working.
+- **Do NOT modify `model/embedder.py`** — embeddings are working.
+- **Do NOT modify `storage/vector_store.py`** — ChromaDB wrapper is fine.
+- **Do NOT modify `_build_portfolio_summary()`** — working.
+- **Do NOT modify `_build_movers_section()`** — working (has JSON fallback already).
+- **Do NOT modify `_parse_insights_safe()`** — working.
+- **Do NOT modify `_cap_key_insights()`** — working.
+- **Do NOT modify `_enrich_articles_with_full_text()`** — working.
+- **Do NOT add any new LLM calls or pipeline steps.**
+- **Do NOT change the editorial prompt structure** beyond adding the ticker allowlist rule.
+- **Do NOT change the insight prompt structure** beyond adding the temporal awareness rule.
 
 ---
 
 ## Validation
 
-After both tasks, run:
+After all changes:
+
+**Step 1:** Clear ChromaDB and re-ingest to test cleanup:
+```bash
+python news/news_ingest_pipeline.py
+```
+Check logs for "Cleanup: removed N articles older than 7 days" or "no stale articles to remove."
+
+**Step 2:** Run the full pipeline:
 ```bash
 python pipeline/run_test_pipeline.py
 ```
 
-Check `logs/digests/` for the latest output. You should see both:
-1. A `.md` file (existing markdown digest) — Movers table should now have real drivers
-2. A `.html` file (new) — open in a browser and verify:
-   - Portfolio Snapshot stats grid renders with green/red coloring
-   - Movers table has all tickers with drivers and correct ▲/▼ coloring
-   - Key Insights has blue ticker tags
-   - News stories have bold headlines and "Why it matters:" in bold
-   - Footer renders correctly
-   - Mobile responsive (shrink browser to 400px width)
-
-If the HTML output has broken formatting, check:
-- Are you using `html.escape()` on all dynamic text? Articles with `&` in company names (AT&T, Johnson & Johnson) will break HTML if not escaped.
-- Is the CSS being copied exactly from the sample template? Don't modify spacing or class names.
-- Are the section dividers present between every section?
+**Step 3:** Check `logs/pipeline_runs/` for the latest run log. Verify:
+1. **Time filter log line appears:** "Time filter: X articles within last 36h (of Y total in store)" — X should be ≤ Y, and the difference represents old articles excluded.
+2. **Article blocks include dates:** In the insights log (`logs/insights/`), article blocks should now show `Published: 2026-03-11T...` dates.
+3. **No non-portfolio tickers in Key Insights:** Check the digest output in `logs/digests/`. MU, AMAT, and any other non-portfolio tickers should be absent from Key Insights and News That Mattered.
+4. **Movers drivers match today's context:** RKLB's driver should reference today-relevant information, not "shares dropped 3.6% during mid-day trading" from a different day.
+5. **Digest is shorter and higher quality:** With only ~36h of articles instead of the full archive, you should see fewer articles passing relevance (likely 20-30 instead of 40), leading to a tighter, more focused digest.
 
 ---
 
-## Summary
+## Summary of Changes
 
-| File | Action |
-|------|--------|
-| `pipeline/run_test_pipeline.py` | Fix `_build_movers_section()` JSON parsing: add logging + regex fallback. Add Step 10: HTML rendering call at end of pipeline. Add import for `html_renderer`. |
-| `pipeline/html_renderer.py` | **New file.** Contains `parse_digest_markdown()` and `render_digest_html()`. Copies CSS from sample template. Renders all 6 sections into a complete HTML email. |
+| File | Action | Details |
+|------|--------|---------|
+| `model/relevance_filter.py` | Modify `find_relevant_articles_from_context()` | Add `max_age_hours` param, time-window `.get()` with `where` clause on `published_ts`, add datetime imports, add log line showing filtered vs total count |
+| `pipeline/run_test_pipeline.py` | Modify `format_article_blocks()` | Add `Published: {published_iso}` line to each article block |
+| `pipeline/run_test_pipeline.py` | Modify editorial call site | Build `portfolio_ticker_list` string from portfolio, pass as new param to `generate_editorial_digest()` |
+| `model/model.py` | Modify `build_editorial_prompt()` | Add `portfolio_tickers` param, add PORTFOLIO TICKER ALLOWLIST rule to STRICT RULES |
+| `model/model.py` | Modify `generate_editorial_digest()` | Add `portfolio_tickers` param, pass through to prompt builder |
+| `model/model.py` | Modify `build_insight_prompt()` | Add TEMPORAL AWARENESS rule to existing STRICT RULES block |
+| `news/news_ingest_pipeline.py` | Modify `ingest_daily_news()` | Add 7-day stale article cleanup at start of function |
+| `CLAUDE.md` | Update | Add time-window filter and ticker allowlist to completed items |

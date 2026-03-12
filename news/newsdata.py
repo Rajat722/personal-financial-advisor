@@ -30,9 +30,14 @@ def _fetch_with_key(api_key: str, params: dict) -> list:
         response = api.latest_api(**params)
         return response.get("results") or []
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(_call)
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(_call)
+    executor.shutdown(wait=False)  # don't block on thread cleanup
+    try:
         return future.result(timeout=_API_TIMEOUT)
+    except concurrent.futures.TimeoutError:
+        future.cancel()
+        raise
 
 
 def fetch_finance_news_from_newsdataio(

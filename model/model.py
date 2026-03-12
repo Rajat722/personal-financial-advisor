@@ -68,6 +68,7 @@ STRICT RULES — you must follow these exactly:
 - If no article supports an insight for a ticker, omit that ticker entirely.
 - "correlation_type" must be "direct" (article names the ticker) or "indirect" (article names a competitor/supplier/customer that the article explicitly links to this ticker).
 - QUALITY THRESHOLD: Only generate an insight if it contains a CONCRETE, SPECIFIC fact useful to an investor — earnings or revenue numbers, a % price movement, an analyst rating or price target change, a product launch, M&A activity, or a management change. DO NOT generate insights where the ticker is merely mentioned in passing, listed in a group of companies, named as an ETF holding, or cited as a general example. If an article about Company A lists Company B in a sidebar or comparison table, do not generate an insight for Company B. Quality over quantity — fewer precise insights is better than many vague ones.
+- TEMPORAL AWARENESS: Each article includes a "Published:" date. When correlating articles with today's price data, strongly prefer articles published within the last 24 hours. If an article is older than 2 days, note the publish date in the "support" field and mark the insight as potentially stale. Do NOT attribute price movements today to articles published 3+ days ago — the market has already priced in that information.
 
 Return a JSON object:
 {{
@@ -107,6 +108,7 @@ def build_editorial_prompt(
     movers_table: str,
     article_titles_urls: str,
     earnings_context: str = "",
+    portfolio_tickers: str = "",
 ) -> str:
     """Build the Call 2 editorial prompt: takes analyst data and writes a polished newsletter."""
     earnings_section = earnings_context.strip() if earnings_context.strip() else "No portfolio earnings events in the next 14 days."
@@ -167,6 +169,8 @@ News That Mattered Today
 === STRICT RULES ===
 - Every factual claim must trace to the analyst insights JSON or article titles provided. Do NOT hallucinate.
 - Do NOT mention any ticker not present in the insights data.
+- PORTFOLIO TICKER ALLOWLIST: You may ONLY mention the following tickers. Any ticker not in this list must be completely excluded from Key Insights, News That Mattered, and all other sections — even if it appears in the analyst insights JSON. Non-portfolio tickers sometimes leak into insights via cross-article contamination.
+  ALLOWED TICKERS: {portfolio_tickers}
 - Do NOT invent price targets, analyst ratings, revenue numbers, or events.
 - DEDUPLICATION: If the same fact appears in the insights JSON multiple times (same event from different articles), mention it ONCE in its most complete form.
 - The Movers & Drivers table is already written and will appear above your output. Do NOT regenerate it. Do NOT write a Portfolio Snapshot section — that's also already computed.
@@ -202,9 +206,11 @@ def generate_editorial_digest(
     movers_table: str,
     article_titles_urls: str,
     earnings_context: str = "",
+    portfolio_tickers: str = "",
 ) -> str:
     """Generate the editorial newsletter via Gemini flash (Call 2)."""
     prompt = build_editorial_prompt(
-        insights_json, portfolio_snapshot, movers_table, article_titles_urls, earnings_context
+        insights_json, portfolio_snapshot, movers_table, article_titles_urls,
+        earnings_context, portfolio_tickers,
     )
     return _generate(prompt, model=settings.GEMINI_EDITORIAL_MODEL)
