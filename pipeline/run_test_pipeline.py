@@ -15,8 +15,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.logging import get_logger
 from model.relevance_filter import find_relevant_articles_from_context, index_portfolio_terms
 from utils.stock_details import get_stock_OHLCV_data, format_summary_json, format_time_series_table, get_upcoming_earnings
-from model.model import summarize_multiple_articles, get_insights_from_news_and_prices, get_end_of_day_summary
+from model.model import get_insights_from_news_and_prices, generate_editorial_digest
 from storage.vector_store import get_portfolio_collection
+from pipeline.html_renderer import parse_digest_markdown, render_digest_html
 
 logger = get_logger("pipeline")
 
@@ -29,8 +30,9 @@ _DIR_RUNS      = LOG_DIR / "pipeline_runs"
 _DIR_INSIGHTS  = LOG_DIR / "insights"
 _DIR_SUMMARIES = LOG_DIR / "summaries"
 _DIR_DIGESTS   = LOG_DIR / "digests"
+_DIR_HTML      = LOG_DIR / "digests" / "html"
 
-for _d in (_DIR_RUNS, _DIR_INSIGHTS, _DIR_SUMMARIES, _DIR_DIGESTS):
+for _d in (_DIR_RUNS, _DIR_INSIGHTS, _DIR_SUMMARIES, _DIR_DIGESTS, _DIR_HTML):
     _d.mkdir(parents=True, exist_ok=True)
 
 
@@ -299,6 +301,37 @@ def _truncate_at_sentence(text: str, limit: int = 200) -> str:
     return truncated.rstrip() + "…"
 
 
+def _parse_insights_safe(raw: str) -> list[dict]:
+    """Parse Call 1 insights JSON; on full-parse failure, extract valid items individually.
+
+    LLMs occasionally generate one malformed entry (e.g. dropping the 'insight' key name),
+    which causes json.loads() to fail for the entire array. This fallback uses a regex to
+    recover all well-formed ticker+insight pairs, skipping the corrupt entry.
+    """
+    if raw.startswith("```"):
+        raw = re.sub(r"^```[^\n]*\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw.strip())
+
+    try:
+        return json.loads(raw).get("insights", [])
+    except json.JSONDecodeError as e:
+        logger.warning(f"Insights JSON failed full parse ({e}). Falling back to per-item extraction.")
+
+    # Regex fallback: match "ticker": "TICKER" ... "insight": "text" pairs within each object.
+    # Handles escaped quotes and newlines inside string values.
+    pattern = re.compile(
+        r'"ticker"\s*:\s*"([^"]+)".*?"insight"\s*:\s*"((?:[^"\\]|\\.)*)"',
+        re.DOTALL,
+    )
+    items = [
+        {"ticker": m.group(1), "insight": m.group(2).replace('\\"', '"').replace('\\n', '\n')}
+        for m in pattern.finditer(raw)
+        if m.group(1) and m.group(2)
+    ]
+    logger.warning(f"Per-item extraction recovered {len(items)} insight(s) from malformed JSON.")
+    return items
+
+
 def _build_movers_section(stock_data: dict, insights_response: str) -> str:
     """Build a Movers & Drivers table from OHLCV data and the Gemini insights JSON."""
     summary = format_summary_json(stock_data)
@@ -307,17 +340,15 @@ def _build_movers_section(stock_data: dict, insights_response: str) -> str:
 
     # Parse insights JSON → best driver string per ticker (first insight = highest quality)
     ticker_drivers: dict[str, str] = {}
-    try:
-        raw = insights_response.strip()
-        if raw.startswith("```"):
-            raw = re.sub(r"^```[^\n]*\n?", "", raw)
-            raw = re.sub(r"\n?```$", "", raw.strip())
-        for item in json.loads(raw).get("insights", []):
-            t = item.get("ticker", "")
-            if t and t not in ticker_drivers and item.get("insight"):
-                ticker_drivers[t] = _truncate_at_sentence(item["insight"], limit=200)
-    except Exception:
-        pass
+    for item in _parse_insights_safe(insights_response):
+        t = item.get("ticker", "")
+        if t and t not in ticker_drivers and item.get("insight"):
+            ticker_drivers[t] = _truncate_at_sentence(item["insight"], limit=200)
+
+    if ticker_drivers:
+        logger.info(f"Movers: {len(ticker_drivers)} driver(s) extracted — {sorted(ticker_drivers)}")
+    else:
+        logger.warning("Movers: no drivers extracted from insights JSON — all rows will show fallback text.")
 
     rows = sorted(
         [(t, d["change_percent"]) for t, d in summary.items()],
@@ -331,6 +362,16 @@ def _build_movers_section(stock_data: dict, insights_response: str) -> str:
         sign = "+" if pct >= 0 else ""
         driver = ticker_drivers.get(ticker, "No specific driver identified today.")
         lines.append(f"| **{ticker}** | {arrow} {sign}{pct:.1f}% | {driver} |")
+    return "\n".join(lines)
+
+
+def _build_article_titles_urls(articles: list) -> str:
+    """Format article titles and URLs as a simple reference list for the editorial prompt."""
+    lines = []
+    for i, article in enumerate(articles):
+        title = article['metadata'].get('title', f'Untitled {i+1}')
+        url = article['metadata'].get('url', '')
+        lines.append(f"- \"{title}\" — {url}")
     return "\n".join(lines)
 
 
@@ -386,7 +427,7 @@ def run_pipeline() -> None:
         logger.info("No portfolio earnings events in the 3-day lookback + 14-day lookahead window.")
 
     # === Step 6: Fetch intraday stock data (full 30-min time series for relevant tickers only) ===
-    stock_data = get_stock_OHLCV_data(tickers_to_fetch, interval="30m", period="1d")
+    stock_data = get_stock_OHLCV_data(tickers_to_fetch, interval="30m", period="5d")
     logger.info(f"Stock data fetched for {len(stock_data)}/{len(tickers_to_fetch)} tickers.")
     stock_summary_json = json.dumps(format_time_series_table(stock_data), indent=2)
 
@@ -400,32 +441,59 @@ def run_pipeline() -> None:
         logger.error(f"Failed to get insights: {e}")
         insights_response = "{}"
 
-    # === Step 8: Summarize relevant articles ===
-    logger.info(f"Summarizing {len(relevant_articles)} articles via Gemini...")
-    try:
-        summarized_articles_json = summarize_multiple_articles(article_blocks)
-        logger.info(f"Summaries generated ({len(summarized_articles_json)} chars).")
-        save_log("summarized_articles", _DIR_SUMMARIES, {"response": summarized_articles_json})
-    except Exception as e:
-        logger.error(f"Failed to summarize articles: {e}")
-        summarized_articles_json = "[]"
-
     # === Step 8.5: Build computed sections (no LLM needed) ===
     portfolio_summary = _build_portfolio_summary(stock_data, portfolio)
     movers_section = _build_movers_section(stock_data, insights_response)
 
-    # === Step 9: Generate end-of-day digest ===
-    logger.info("Generating end-of-day digest via Gemini...")
+    # === Step 9: Generate editorial digest (Call 2: gemini-2.5-flash) ===
+    article_titles_urls = _build_article_titles_urls(relevant_articles)
+    logger.info(
+        f"Editorial prompt inputs — insights: {len(insights_response)} chars, "
+        f"article_titles: {len(article_titles_urls)} chars, "
+        f"movers: {len(movers_section)} chars, "
+        f"portfolio_snapshot: {len(portfolio_summary)} chars."
+    )
+    logger.info("Generating editorial digest via Gemini flash...")
     try:
-        eod_summary = get_end_of_day_summary(insights_response, summarized_articles_json, earnings_context)
-        logger.info(f"EOD digest generated ({len(eod_summary)} chars).")
-        eod_summary = _cap_key_insights(eod_summary, limit=15)
+        editorial_text = generate_editorial_digest(
+            insights_json=insights_response,
+            portfolio_snapshot=portfolio_summary,
+            movers_table=movers_section,
+            article_titles_urls=article_titles_urls,
+            earnings_context=earnings_context,
+        )
+        logger.info(f"Editorial digest generated ({len(editorial_text)} chars).")
+        editorial_text = _cap_key_insights(editorial_text, limit=15)
         prefix_parts = [p for p in [portfolio_summary, movers_section] if p]
-        full_digest = "\n\n---\n\n".join(prefix_parts + [eod_summary])
+        full_digest = "\n\n---\n\n".join(prefix_parts + [editorial_text])
         save_eod_digest(full_digest)
         logger.info("\n--- EOD DIGEST ---\n" + full_digest + "\n--- END DIGEST ---")
     except Exception as e:
-        logger.error(f"Failed to generate EOD summary: {e}")
+        logger.error(f"Failed to generate editorial digest: {e}")
+        editorial_text = ""
+
+    # === Step 10: Render HTML email ===
+    if editorial_text:
+        logger.info("Rendering HTML email template...")
+        try:
+            parsed = parse_digest_markdown(portfolio_summary, movers_section, editorial_text)
+            date_display = datetime.now(_EST).strftime("%B %d, %Y")
+            html_output = render_digest_html(
+                portfolio_snapshot=parsed["portfolio_snapshot"],
+                movers=parsed["movers"],
+                key_insights=parsed["key_insights"],
+                earnings_text=parsed["earnings_text"],
+                news_stories=parsed["news_stories"],
+                date_str=date_display,
+                article_count=len(relevant_articles),
+                holdings_count=len(portfolio["equities"]),
+            )
+            html_path = _DIR_HTML / f"digest_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}_{_log_ts()}.html"
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(html_output)
+            logger.info(f"HTML email saved: {html_path}")
+        except Exception as e:
+            logger.error(f"Failed to render HTML email: {e}")
 
     logger.info("Pipeline complete.")
 

@@ -26,8 +26,23 @@ def get_stock_OHLCV_data(tickers: list, interval: str, period: str) -> dict:
                 _log.warning(f"[{ticker}] No data within market hours (09:30–16:30 ET). Skipping.")
                 continue
 
-            # Drop last row if it's not a full interval
-            if df.index[-1].time().strftime('%H:%M') != "16:30":
+            # Select the most recent trading date with >1 bar.
+            # If the market just opened (only 1 incomplete bar today), fall back to
+            # the previous trading day's complete data instead.
+            dates = sorted(df.index.normalize().unique(), reverse=True)
+            selected = None
+            for d in dates:
+                day_df = df[df.index.normalize() == d]
+                if len(day_df) > 1:
+                    selected = day_df
+                    break
+            if selected is None:
+                _log.warning(f"[{ticker}] Only 1 bar available — using it as best-effort.")
+                selected = df[df.index.normalize() == dates[0]]
+            df = selected
+
+            # Drop the last bar if it's not a full interval (only when >1 bar remain)
+            if len(df) > 1 and df.index[-1].time().strftime('%H:%M') != "16:30":
                 df = df.iloc[:-1]
 
             result[ticker] = df
