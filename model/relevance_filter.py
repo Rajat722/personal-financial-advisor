@@ -9,7 +9,7 @@ from storage.vector_store import get_article_collection, find_similar_in_portfol
 from model.embedder import GeminiEmbedder
 from core.config import settings
 from core.logging import get_logger
-from news.noise_filter import is_noise_article
+from news.noise_filter import is_noise_article, is_speculative_article, is_price_alert_article
 
 log = get_logger("relevance_filter")
 
@@ -19,6 +19,40 @@ SIMILARITY_THRESHOLD: float = settings.SIM_THRESHOLD
 # Maximum articles passed to the LLM — keeps prompt size manageable and digest readable.
 # Articles are sorted by similarity score descending; only the top N are used.
 MAX_RELEVANT_ARTICLES: int = 40
+
+# Penalty applied to similarity score for broad-term matches.
+# A broad-match article needs raw similarity of ~0.79+ to compete with
+# a ticker-specific article at 0.75. Tuned to let major market events
+# through (crash articles score 0.85+) while filtering generic commentary.
+BROAD_MATCH_PENALTY: float = 0.04
+
+# ETF company names are hardcoded — they rarely change and aren't distinguishable
+# from stocks in portfolio.json. Sectors and indices are loaded dynamically.
+_BROAD_ETF_NAMES: set[str] = {"invesco qqq trust", "spdr s&p 500 etf trust"}
+
+_PORTFOLIO_PATH = Path(__file__).resolve().parent.parent / "user_portfolio" / "portfolio.json"
+
+
+def _build_broad_match_terms() -> set[str]:
+    """Build the set of broad portfolio terms that should receive a similarity penalty.
+
+    Loads sectors and indices from portfolio.json at startup so the set stays
+    in sync with the portfolio without manual updates.
+    """
+    try:
+        with open(_PORTFOLIO_PATH, "r") as f:
+            data = json.load(f)
+        sectors = {s.lower() for s in data.get("sectors", [])}
+        indices = {i.lower() for i in data.get("indices", [])}
+        return sectors | indices | _BROAD_ETF_NAMES
+    except Exception:
+        log.warning("Could not load portfolio.json for broad-match terms — using ETF names only.")
+        return set(_BROAD_ETF_NAMES)
+
+
+# Broad portfolio terms that match too many articles. Articles whose best match
+# is one of these get a similarity penalty so ticker-specific articles are preferred.
+_BROAD_MATCH_TERMS: set[str] = _build_broad_match_terms()
 
 embedder = GeminiEmbedder()
 
@@ -185,6 +219,16 @@ def find_relevant_articles_from_context(max_age_hours: int = 36) -> list:
             noise_skipped += 1
             continue
 
+        if is_speculative_article(title):
+            log.debug(f"[SPECULATIVE] {title[:70]}")
+            noise_skipped += 1
+            continue
+
+        if is_price_alert_article(title):
+            log.debug(f"[PRICE-ALERT] {title[:70]}")
+            noise_skipped += 1
+            continue
+
         try:
             results = find_similar_in_portfolio(embedding, top_k=3)
             distances = results.get("distances", [[]])[0]
@@ -197,20 +241,25 @@ def find_relevant_articles_from_context(max_age_hours: int = 36) -> list:
             best_similarity = 1.0 - best_distance
             best_match = portfolio_docs[distances.index(best_distance)] if portfolio_docs else "unknown"
 
+            # Penalize broad-term matches so ticker-specific articles are preferred
+            is_broad = best_match.lower() in _BROAD_MATCH_TERMS
+            effective_similarity = best_similarity - BROAD_MATCH_PENALTY if is_broad else best_similarity
+
             log.info(
-                f"[{'PASS' if best_similarity >= SIMILARITY_THRESHOLD else 'FAIL'}] "
-                f"similarity={best_similarity:.3f} match='{best_match}' | {title[:70]}"
+                f"[{'PASS' if effective_similarity >= SIMILARITY_THRESHOLD else 'FAIL'}] "
+                f"similarity={best_similarity:.3f}{' (broad:-' + str(BROAD_MATCH_PENALTY) + ')' if is_broad else ''} "
+                f"match='{best_match}' | {title[:70]}"
             )
 
             # ChromaDB returns cosine distances (0=identical). Convert to similarity.
-            if best_similarity >= SIMILARITY_THRESHOLD:
+            if effective_similarity >= SIMILARITY_THRESHOLD:
                 relevant_articles.append({
                     "doc_id": doc_id,
                     "text": text,
                     "metadata": metadata,
                     "scores": distances,
                     "best_match": best_match,
-                    "best_similarity": best_similarity,
+                    "best_similarity": effective_similarity,
                 })
         except Exception as e:
             log.warning(f"Skipping {doc_id} due to error: {e}")

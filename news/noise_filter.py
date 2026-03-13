@@ -83,7 +83,7 @@ _PATTERNS = [
     # "[Fund LLC] Takes Position in JPMorgan" — anchored to fund entity indicators so
     # "Microsoft Takes Position in OpenAI" (real news, no fund keyword) is NOT blocked.
     re.compile(
-        r"\b(?:LLC|Ltd\.?|L\.P\.|LP|management|capital|advisors?|wealth|asset|partners?|associates?)\b"
+        r"\b(?:LLC|Ltd\.?|Ltda\.?|L\.P\.|LP|Co\.?|Corp\.?|Inc\.?|Pte\.?|GmbH|SA|AG|NV|BV|Pty\.?|management|capital|advisors?|wealth|asset|partners?|associates?|group|fund|trust|holdings?)\b"
         r".{0,80}\btakes?\s+(?:a\s+)?(?:new\s+)?position\s+in\b",
         re.IGNORECASE,
     ),
@@ -91,7 +91,7 @@ _PATTERNS = [
     # "[Fund LLC] Makes New $2.20 Million Investment in Amazon" — anchored to fund entity
     # indicators so "Microsoft Makes $2B Investment in OpenAI" is NOT blocked.
     re.compile(
-        r"\b(?:LLC|Ltd\.?|L\.P\.|LP|management|capital|advisors?|wealth|asset|partners?|associates?)\b"
+        r"\b(?:LLC|Ltd\.?|Ltda\.?|L\.P\.|LP|Co\.?|Corp\.?|Inc\.?|Pte\.?|GmbH|SA|AG|NV|BV|Pty\.?|management|capital|advisors?|wealth|asset|partners?|associates?|group|fund|trust|holdings?)\b"
         r".{0,80}\bmakes?\s+(?:a?\s+)?(?:new\s+)?\$[\d,.]+\s+(?:million|billion|thousand)\s+investment\s+in\b",
         re.IGNORECASE,
     ),
@@ -99,8 +99,32 @@ _PATTERNS = [
     # "[Fund LLC] Acquires New Position in Cloudflare" — anchored to fund entity indicators
     # so "Nvidia Acquires Stake in [company]" (real news) is NOT blocked.
     re.compile(
-        r"\b(?:LLC|Ltd\.?|L\.P\.|LP|management|capital|advisors?|wealth|asset|partners?|associates?)\b"
+        r"\b(?:LLC|Ltd\.?|Ltda\.?|L\.P\.|LP|Co\.?|Corp\.?|Inc\.?|Pte\.?|GmbH|SA|AG|NV|BV|Pty\.?|management|capital|advisors?|wealth|asset|partners?|associates?|group|fund|trust|holdings?)\b"
         r".{0,80}\bacquires?\s+(?:a\s+)?(?:new\s+)?position\s+in\b",
+        re.IGNORECASE,
+    ),
+
+    # "How-Pick-An-Sp-500-Fund" / "best-stocks-to-buy-now-march-2026"
+    # URL slugs stored as article titles — 4+ hyphen-separated tokens, no spaces.
+    # The API may return slugs with title-cased words (How-Pick-An-...) so IGNORECASE
+    # is required. False positive guard: real headlines always contain spaces.
+    re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+){3,}$", re.IGNORECASE),
+
+    # "Gordian Capital Buys Shares of 10,810 Alphabet" / "Firm Purchases 2,800 Shares of JPMorgan"
+    # The specific share count after "of" distinguishes fund disclosures from corporate M&A.
+    # "Apple Buys Stake in AI Startup" does NOT match (no digit after "of").
+    re.compile(
+        r"\b(?:buys?|purchases?|acquires?)\s+(?:shares?|stake)\s+of\s+[\d,]+\s",
+        re.IGNORECASE,
+    ),
+
+    # "Jefferies Financial Group Inc. Takes $2.13 Million Position in Axon Enterprise"
+    # "Engineers Gate Builds $85 Million Position in Net-Lease Retail REIT Agree Realty"
+    # Dollar amount is the anchor — real M&A uses "invests", "acquires", "buys equity",
+    # not "takes/builds/establishes position". Limited to "position" (not "stake") to
+    # avoid blocking genuine M&A like "Apple Takes $2B Stake in OpenAI".
+    re.compile(
+        r"\b(?:takes?|builds?|establishes?)\s+\$[\d,.]+\s+(?:million|billion|thousand)\s+position\s+in\b",
         re.IGNORECASE,
     ),
 
@@ -171,3 +195,87 @@ def is_generic_roundup(title: str) -> bool:
     because they lack the 'stocks to [verb]' phrasing.
     """
     return any(p.search(title) for p in _ROUNDUP_PATTERNS)
+
+
+# ---------------------------------------------------------------------------
+# Speculative / opinion / historical return article filter
+# ---------------------------------------------------------------------------
+# These are SEO articles built around a speculative question or a historical
+# return calculation. They contain no fresh news — just projections, "what-if"
+# scenarios, or backward-looking performance data. They match portfolio tickers
+# with high similarity but generate zero actionable insights.
+
+_SPECULATIVE_PATTERNS = [
+    # "Can Nvidia Stock Reach a $10 Trillion Market Cap by 2030?"
+    # "Can Tesla Reach $500 by Year-End?"
+    re.compile(r"\bcan\s+.{1,40}\breach\b", re.IGNORECASE),
+
+    # "Where Will Realty Income Be in 10 Years?"
+    # "Where Could Tesla Be in 3 Years?"
+    # "Where Might Apple Stock Be in 5 Years?"
+    re.compile(r"\bwhere\s+(?:will|could|might|may)\s+.{1,40}\bbe\s+in\s+\d+\s+years?\b", re.IGNORECASE),
+
+    # "Is Tesla Stock Going to $1,000?"
+    # "Is NVDA Going to $200?"
+    re.compile(r"\bis\s+.{1,30}\bgoing\s+to\s+\$", re.IGNORECASE),
+
+    # "If You Invested $1000 In Apple 20 Years Ago"
+    # "If You Had Invested $500 in Tesla Stock 5 Years Ago"
+    # "If I Had $5,000 to Invest in AI, I'd Put It in This Stock"
+    # Subject is constrained to "i" or "you" — "If Tesla Had $5B" does NOT match.
+    re.compile(r"\bif\s+(?:i|you)\s+(?:had\s+)?(?:invested\b|\$)", re.IGNORECASE),
+
+    # "Here's How Much You Would Have Made Owning Microsoft Stock"
+    # "How Much $1000 Invested In Apple Would Be Worth Today"
+    re.compile(r"\bhow\s+much\s+.{0,30}\b(?:invested|made|worth)\b", re.IGNORECASE),
+
+    # "Here's How Much $1000 Invested In Apple 20 Years Ago Would Be Worth Today"
+    re.compile(r"\$\d+\s+invested\s+in\b", re.IGNORECASE),
+
+    # "Forget QQQ: 3 Sector ETFs Quietly Outperforming Tech"
+    # "Forget Tesla: Here's a Better EV Stock"
+    re.compile(r"^forget\s+\w+\s*:", re.IGNORECASE),
+
+    # "Prediction: This AI Stock Will Be the Biggest Winner of the Capex Boom"
+    # Only matches when "Prediction:" is the FIRST word — real analyst notes lead with
+    # the institution name ("Morgan Stanley Predicts...", "BofA Raises Target...").
+    re.compile(r"^prediction\s*:", re.IGNORECASE),
+]
+
+
+# ---------------------------------------------------------------------------
+# Price-alert article filter
+# ---------------------------------------------------------------------------
+# Catches pure opinion-hook titles that have no causal content.
+# "Here's What Happened" / "Here's Why" are intentionally excluded — those
+# articles typically contain the actual explanation and are handled at the
+# LLM level via the PRICE-ONLY ARTICLES rule in the analyst prompt.
+
+_PRICE_ALERT_PATTERNS = [
+    # "Trading 1.3% Higher — Time to Buy?"
+    # "Down 4% — Time to Sell?"
+    re.compile(r"[-\u2013\u2014]\s*time\s+to\s+(?:buy|sell)\??\s*$", re.IGNORECASE),
+]
+
+
+def is_price_alert_article(title: str) -> bool:
+    """Return True if the article is a pure opinion-hook price alert with no causal content.
+
+    Only catches "— Time to Buy?" / "— Time to Sell?" suffix patterns.
+    "Here's What Happened" and "Here's Why" are intentionally NOT filtered here —
+    those articles often contain the actual cause of the price move and are handled
+    by the PRICE-ONLY ARTICLES rule in the analyst prompt instead.
+    """
+    return any(p.search(title) for p in _PRICE_ALERT_PATTERNS)
+
+
+def is_speculative_article(title: str) -> bool:
+    """Return True if the article is a speculative opinion/projection piece with no fresh news.
+
+    False positive guard: checked against known good articles —
+    'Apple Just Unveiled the iPhone 17e. Should You Buy, Sell, or Hold AAPL Stock Now?' does NOT match
+    because it lacks the speculative question patterns above.
+    'Nvidia Stock Reaches All-Time High' does NOT match 'can .* reach' because it lacks 'can'.
+    'Is Amazon Stock a Long-Term Buy?' does NOT match 'is .* going to $' because it lacks 'going to $'.
+    """
+    return any(p.search(title) for p in _SPECULATIVE_PATTERNS)

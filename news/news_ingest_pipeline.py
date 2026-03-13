@@ -11,7 +11,7 @@ from core.config import settings
 from core.logging import get_logger
 from news.normalize import normalize_article
 from news.newsdata import fetch_finance_news_from_newsdataio
-from news.noise_filter import is_noise_article as _is_noise_article, is_generic_roundup as _is_generic_roundup
+from news.noise_filter import is_noise_article as _is_noise_article, is_generic_roundup as _is_generic_roundup, is_speculative_article as _is_speculative_article, is_price_alert_article as _is_price_alert_article
 from model.embedder import GeminiEmbedder
 from storage.vector_store import upsert_to_collection, get_article_collection
 
@@ -172,6 +172,8 @@ def ingest_daily_news() -> int:
     stored_count = 0
     noise_count = 0
     roundup_count = 0
+    speculative_count = 0
+    price_alert_count = 0
     id_dup_count = 0
     title_dup_count = 0
     no_summary_count = 0
@@ -220,6 +222,18 @@ def ingest_daily_news() -> int:
             roundup_count += 1
             continue
 
+        # Speculative filter: opinion/projection/historical return articles
+        if _is_speculative_article(article.title):
+            log.debug(f"Filtering speculative: {article.title}")
+            speculative_count += 1
+            continue
+
+        # Price-alert filter: "— Time to Buy?" / "— Time to Sell?" opinion hooks
+        if _is_price_alert_article(article.title):
+            log.debug(f"Filtering price-alert: {article.title}")
+            price_alert_count += 1
+            continue
+
         if not article.summary:
             log.debug(f"Skipping (no summary): {article.title}")
             no_summary_count += 1
@@ -262,6 +276,8 @@ def ingest_daily_news() -> int:
         f"Ingestion complete: {stored_count} stored | "
         f"{noise_count} noise-filtered | "
         f"{roundup_count} roundup-filtered | "
+        f"{speculative_count} speculative-filtered | "
+        f"{price_alert_count} price-alert-filtered | "
         f"{id_dup_count} id-dups | "
         f"{title_dup_count} title-dups | "
         f"{no_summary_count} no-summary | "

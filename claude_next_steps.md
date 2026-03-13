@@ -1,263 +1,287 @@
-# Data Freshness Fix: Time-Window Articles + Portfolio Ticker Allowlist
+# Article Quality: Broad-Match Penalty + Speculative Filter + Institutional Disclosure Fix
 
 Read `CLAUDE.md` first, then read this entire prompt before making any changes.
 
 ---
 
-## Why This Change
+## Context
 
-The pipeline has a fundamental data quality problem: `find_relevant_articles_from_context()` in `model/relevance_filter.py` calls `article_collection.get()` which returns **every article ever stored in ChromaDB** — no date filter, no recency preference. Articles from 5 days ago and articles from today are treated identically, ranked only by embedding similarity.
+The pipeline produces a 40-article window for the LLM. Analysis of the March 11 digest shows roughly 12-15 of those 40 articles are useful; the rest are speculative opinion pieces, institutional fund disclosures, or generic market commentary that matched broad portfolio terms ("S&P 500", "large-cap tech", "Invesco QQQ Trust") rather than specific tickers.
 
-This causes three concrete bugs visible in recent digests:
-
-1. **Stale facts presented as today's news.** The March 11 digest attributed "Elon Musk predicted 10 billion humanoid robots by 2040" to NVDA — this was from an old Tesla/AI article that matched NVDA by embedding similarity. It's days-old, and the attribution is wrong.
-
-2. **The LLM correlates old news with today's prices.** Call 1 receives 40 articles (many from prior days) plus today's OHLCV data and is asked to correlate them. RKLB was top gainer (+2.8%) but its Movers driver said "shares dropped 3.6%" — from a days-old article about a different day's price action. The model is being asked to do something logically impossible.
-
-3. **Article slots wasted on old content.** The 40-article cap means stale articles with high similarity scores crowd out today's fresh articles.
-
-Every article already has `published_ts` (integer Unix timestamp) stored in its ChromaDB metadata. The fix is straightforward.
+Three fixes, in priority order. All three are independent — each one improves quality on its own.
 
 ---
 
-## Task 1: Time-Window the Relevance Filter
+## Fix 1: Broad-Term Similarity Penalty (highest impact)
 
 **File:** `model/relevance_filter.py`
 
-**Change:** Modify `find_relevant_articles_from_context()` to only consider articles published within the last 36 hours. 36 hours (not 24) gives buffer for articles published late evening that are still market-relevant the next morning.
+**Problem:** Articles matching broad portfolio terms ("S&P 500", "Nasdaq", "large-cap tech", "cloud computing", "ai", "semiconductors", "Pharmaceuticals", "Invesco QQQ Trust", "SPDR S&P 500 ETF Trust") score 0.75-0.78 similarity and fill 12 of 40 article slots with generic market commentary. An article titled "Billionaires Are Loading Up on Index Funds" at 0.762 matching "S&P 500" beats a DKNG earnings article at 0.758 matching "DraftKings".
 
-Add `max_age_hours` as a parameter with default 36. Add the needed imports at the top of the file.
+**Fix:** After calculating `best_similarity`, apply a penalty when the `best_match` is a broad term rather than a specific ticker or company name. This makes broad-match articles need a higher raw similarity score to compete for the 40 slots.
 
-**Current code (line 147-148):**
+The `best_match` field contains the raw `document` string stored in the portfolio ChromaDB collection. For tickers this is the ticker symbol (e.g., `"AAPL"`, `"COST"`). For company names it's the company string (e.g., `"Apple"`, `"Costco"`). For sectors it's the raw sector string (e.g., `"cloud computing"`, `"large-cap tech"`). For indices it's the raw index string (e.g., `"S&P 500"`, `"Nasdaq"`).
+
+**Step 1a:** Define the set of broad terms that should be penalized. Add this constant near the top of the file, after `MAX_RELEVANT_ARTICLES`:
+
 ```python
-article_collection = get_article_collection()
-all_articles = article_collection.get(include=["documents", "embeddings", "metadatas"])
+# Broad portfolio terms that match too many articles. Articles whose best match
+# is one of these get a similarity penalty so ticker-specific articles are preferred.
+# Includes: all sector descriptions, all index descriptions, and ETF company names
+# (QQQ and SPY match everything tech/market related).
+_BROAD_MATCH_TERMS: set[str] = {
+    # Sectors (from portfolio.json → _SECTOR_DESCRIPTIONS keys)
+    "cloud computing", "ai", "semiconductors", "large-cap tech", "pharmaceuticals",
+    # Indices (from portfolio.json → _INDEX_DESCRIPTIONS keys)
+    "s&p 500", "nasdaq", "russell 2000",
+    # ETF company names (stored as documents in portfolio collection)
+    "invesco qqq trust", "spdr s&p 500 etf trust",
+}
+
+# Penalty applied to similarity score for broad-term matches.
+# A broad-match article needs raw similarity of ~0.79+ to compete with
+# a ticker-specific article at 0.75. Tuned to let major market events
+# through (crash articles score 0.85+) while filtering generic commentary.
+BROAD_MATCH_PENALTY: float = 0.04
 ```
 
-**New code:**
-```python
-article_collection = get_article_collection()
+**Step 1b:** Apply the penalty inside the scoring loop. In the `find_relevant_articles_from_context()` function, right after `best_match` is computed (after line 186) and BEFORE the threshold check (line 194), add:
 
-# Time-window: only consider articles published within max_age_hours.
-# Every article has published_ts (int Unix timestamp) in metadata.
-cutoff_ts = int((datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).timestamp())
-all_articles = article_collection.get(
-    where={"published_ts": {"$gte": cutoff_ts}},
-    include=["documents", "embeddings", "metadatas"],
-)
+```python
+            # Penalize broad-term matches so ticker-specific articles are preferred
+            is_broad = best_match.lower() in _BROAD_MATCH_TERMS
+            effective_similarity = best_similarity - BROAD_MATCH_PENALTY if is_broad else best_similarity
 ```
 
-Update the function signature to accept the time window:
+Then change the threshold check and the appended data to use `effective_similarity`:
+
 ```python
-def find_relevant_articles_from_context(max_age_hours: int = 36) -> list:
+            log.info(
+                f"[{'PASS' if effective_similarity >= SIMILARITY_THRESHOLD else 'FAIL'}] "
+                f"similarity={best_similarity:.3f}{' (broad:-' + str(BROAD_MATCH_PENALTY) + ')' if is_broad else ''} "
+                f"match='{best_match}' | {title[:70]}"
+            )
+
+            if effective_similarity >= SIMILARITY_THRESHOLD:
+                relevant_articles.append({
+                    "doc_id": doc_id,
+                    "text": text,
+                    "metadata": metadata,
+                    "scores": distances,
+                    "best_match": best_match,
+                    "best_similarity": effective_similarity,
+                })
 ```
 
-Add the imports at the top of `relevance_filter.py` (add to existing imports):
-```python
-from datetime import datetime, timezone, timedelta
-```
+This way the log shows both the raw score AND the penalty, so you can verify it's working. Articles are sorted and capped by `effective_similarity`, meaning broad-match articles naturally fall to the bottom of the 40-slot window.
 
-**Also add logging** so you can see how the time filter affects article count:
-```python
-total_in_store = article_collection.count()
-log.info(f"Time filter: {len(article_ids)} articles within last {max_age_hours}h (of {total_in_store} total in store)")
-```
-
-Place this log line right after the `article_ids = all_articles.get("ids", [])` line.
-
-**Important:** The `where` clause on `.get()` is a ChromaDB feature — it filters by metadata fields before returning results. This is different from `.query()` (which searches by embedding). We want `.get()` with `where` because we still need to do our own similarity comparison against the portfolio embeddings afterwards.
+**Do NOT change anything else in this function** — the time-window filter, deduplication, noise check, and capping logic all stay the same.
 
 ---
 
-## Task 2: Include Publication Date in Article Blocks Sent to LLM
+## Fix 2: Speculative/Opinion Article Patterns (medium impact)
 
-**File:** `pipeline/run_test_pipeline.py`
+**File:** `news/noise_filter.py`
 
-**Change:** Modify `format_article_blocks()` to include the article's publication date. This lets Call 1 distinguish between a March 7 COST earnings article and a March 11 COST tariff article, and prevents the LLM from treating all articles as "today's news."
+**Problem:** SEO articles with speculative headlines ("Can Nvidia Stock Reach $10 Trillion?", "Where Will Realty Income Be in 10 Years?", "If You Invested $1000 in Apple 20 Years Ago") contain historical stats and opinion but zero fresh news. They match portfolio tickers perfectly (high similarity scores) and waste LLM context.
 
-**Current code (lines 119-126):**
+**Fix:** Add a new `_SPECULATIVE_PATTERNS` list and a new `is_speculative_article()` function, following the same pattern as the existing `_ROUNDUP_PATTERNS` / `is_generic_roundup()`.
+
+Add this after the existing `_ROUNDUP_PATTERNS` list and `is_generic_roundup()` function (after line 173):
+
 ```python
-def format_article_blocks(articles: list) -> str:
-    """Format a list of article dicts into numbered text blocks for LLM prompts."""
-    blocks = []
-    for i, article in enumerate(articles):
-        title = article['metadata'].get("title", f"Untitled Article {i+1}")
-        text = article['text']
-        blocks.append(f"--- Article {i+1} ---\nTitle: {title}\nText: {text}\n")
-    return "\n".join(blocks)
-```
+# ---------------------------------------------------------------------------
+# Speculative / opinion / historical return article filter
+# ---------------------------------------------------------------------------
+# These are SEO articles built around a speculative question or a historical
+# return calculation. They contain no fresh news — just projections, "what-if"
+# scenarios, or backward-looking performance data. They match portfolio tickers
+# with high similarity but generate zero actionable insights.
 
-**New code:**
-```python
-def format_article_blocks(articles: list) -> str:
-    """Format a list of article dicts into numbered text blocks for LLM prompts.
+_SPECULATIVE_PATTERNS = [
+    # "Can Nvidia Stock Reach a $10 Trillion Market Cap by 2030?"
+    # "Can Tesla Reach $500 by Year-End?"
+    re.compile(r"\bcan\s+.{1,40}\breach\b", re.IGNORECASE),
 
-    Includes publication date so the LLM can distinguish fresh vs. older articles
-    and avoid attributing stale facts to today's price movements.
+    # "Where Will Realty Income Be in 10 Years?"
+    # "Where Will Apple Stock Be in 5 Years?"
+    re.compile(r"\bwhere\s+will\s+.{1,40}\bbe\s+in\s+\d+\s+years?\b", re.IGNORECASE),
+
+    # "Is Tesla Stock Going to $1,000?"
+    # "Is NVDA Going to $200?"
+    re.compile(r"\bis\s+.{1,30}\bgoing\s+to\s+\$", re.IGNORECASE),
+
+    # "If You Invested $1000 In Apple 20 Years Ago"
+    # "If You Had Invested $500 in Tesla Stock 5 Years Ago"
+    re.compile(r"\bif\s+you\s+(?:had\s+)?invested\b", re.IGNORECASE),
+
+    # "Here's How Much You Would Have Made Owning Microsoft Stock"
+    # "How Much $1000 Invested In Apple Would Be Worth Today"
+    re.compile(r"\bhow\s+much\s+.{0,30}\b(?:invested|made|worth)\b", re.IGNORECASE),
+
+    # "Here's How Much $1000 Invested In Apple 20 Years Ago Would Be Worth Today"
+    re.compile(r"\$\d+\s+invested\s+in\b", re.IGNORECASE),
+
+    # "Forget QQQ: 3 Sector ETFs Quietly Outperforming Tech"
+    # "Forget Tesla: Here's a Better EV Stock"
+    re.compile(r"^forget\s+\w+\s*:", re.IGNORECASE),
+]
+
+
+def is_speculative_article(title: str) -> bool:
+    """Return True if the article is a speculative opinion/projection piece with no fresh news.
+
+    False positive guard: checked against known good articles —
+    'Apple Just Unveiled the iPhone 17e. Should You Buy, Sell, or Hold AAPL Stock Now?' does NOT match
+    because it lacks the speculative question patterns above.
+    'Nvidia Stock Reaches All-Time High' does NOT match 'can .* reach' because it lacks 'can'.
+    'Is Amazon Stock a Long-Term Buy?' does NOT match 'is .* going to $' because it lacks 'going to $'.
     """
-    blocks = []
-    for i, article in enumerate(articles):
-        title = article['metadata'].get("title", f"Untitled Article {i+1}")
-        published = article['metadata'].get("published_iso", "unknown")
-        text = article['text']
-        blocks.append(
-            f"--- Article {i+1} ---\n"
-            f"Title: {title}\n"
-            f"Published: {published}\n"
-            f"Text: {text}\n"
-        )
-    return "\n".join(blocks)
+    return any(p.search(title) for p in _SPECULATIVE_PATTERNS)
 ```
 
----
-
-## Task 3: Add Portfolio Ticker Allowlist to Editorial Prompt
-
-**File:** `model/model.py`
-
-**Problem (P1 from dev log):** Non-portfolio tickers (MU, AMAT) appeared in Key Insights because Call 1 extracted insights for tickers mentioned in articles that passed relevance filtering (e.g., an "AI trade" article mentioning MU and AMAT passed because it matched QQQ embeddings). The editorial prompt says "Do NOT mention tickers not in insights data" — but the insights data itself now contains non-portfolio tickers.
-
-**Fix:** Pass the portfolio ticker list to the editorial prompt and add a hard allowlist rule.
-
-**Step 3a:** Update `build_editorial_prompt()` signature to accept a ticker list. Add a new parameter:
+**Then wire it into the ingestion pipeline.** In `news/news_ingest_pipeline.py`, the speculative filter should be called right after the existing `is_generic_roundup()` check. Find the block (around lines 201-206):
 
 ```python
-def build_editorial_prompt(
-    insights_json: str,
-    portfolio_snapshot: str,
-    movers_table: str,
-    article_titles_urls: str,
-    earnings_context: str = "",
-    portfolio_tickers: str = "",
-) -> str:
+        # Roundup filter: generic SEO stock-list articles ("Best Tech Stocks To Watch Today")
+        if _is_generic_roundup(article.title):
+            log.debug(f"Filtering roundup: {article.title}")
+            roundup_count += 1
+            continue
 ```
 
-**Step 3b:** Add this rule to the `=== STRICT RULES ===` section of the editorial prompt, right after the existing "Do NOT mention any ticker not present in the insights data" line:
-
-```
-- PORTFOLIO TICKER ALLOWLIST: You may ONLY mention the following tickers. Any ticker not in this list must be completely excluded from Key Insights, News That Mattered, and all other sections — even if it appears in the analyst insights JSON. Non-portfolio tickers sometimes leak into insights via cross-article contamination.
-  ALLOWED TICKERS: {portfolio_tickers}
-```
-
-**Step 3c:** Update `generate_editorial_digest()` to accept and pass through the ticker list:
+Add a new block immediately after it:
 
 ```python
-@gemini_retry(max_attempts=settings.GEMINI_RETRY_ATTEMPTS, base_delay=settings.GEMINI_RETRY_DELAY)
-def generate_editorial_digest(
-    insights_json: str,
-    portfolio_snapshot: str,
-    movers_table: str,
-    article_titles_urls: str,
-    earnings_context: str = "",
-    portfolio_tickers: str = "",
-) -> str:
-    """Generate the editorial newsletter via Gemini flash (Call 2)."""
-    prompt = build_editorial_prompt(
-        insights_json, portfolio_snapshot, movers_table, article_titles_urls,
-        earnings_context, portfolio_tickers,
-    )
-    return _generate(prompt, model=settings.GEMINI_EDITORIAL_MODEL)
+        # Speculative filter: opinion/projection/historical return articles
+        if _is_speculative_article(article.title):
+            log.debug(f"Filtering speculative: {article.title}")
+            speculative_count += 1
+            continue
 ```
 
-**Step 3d:** Update the call site in `pipeline/run_test_pipeline.py` (around line 458) to pass the ticker list:
-
+Add the import at the top of `news_ingest_pipeline.py` — update the existing import line:
 ```python
-    # Build portfolio ticker allowlist for editorial prompt
-    portfolio_ticker_list = ", ".join(e["ticker"] for e in portfolio["equities"])
+from news.noise_filter import is_noise_article as _is_noise_article, is_generic_roundup as _is_generic_roundup, is_speculative_article as _is_speculative_article
+```
 
-    editorial_text = generate_editorial_digest(
-        insights_json=insights_response,
-        portfolio_snapshot=portfolio_summary,
-        movers_table=movers_section,
-        article_titles_urls=article_titles_urls,
-        earnings_context=earnings_context,
-        portfolio_tickers=portfolio_ticker_list,
+Add `speculative_count = 0` near the other counter initializations (around line 163).
+
+Add the speculative count to the final log summary (around line 245):
+```python
+    log.info(
+        f"Ingestion complete: {stored_count} stored | "
+        f"{noise_count} noise-filtered | "
+        f"{roundup_count} roundup-filtered | "
+        f"{speculative_count} speculative-filtered | "
+        f"{id_dup_count} id-dups | "
+        f"{title_dup_count} title-dups | "
+        f"{no_summary_count} no-summary | "
+        f"{norm_fail_count} norm-failed"
     )
 ```
 
----
-
-## Task 4: Add ChromaDB Stale Article Cleanup to Ingestion Pipeline
-
-**File:** `news/news_ingest_pipeline.py`
-
-**Change:** Add a cleanup step at the start of `ingest_daily_news()` that deletes articles older than 7 days. This prevents the ever-growing archive problem and keeps ChromaDB fast.
-
-Add this right after the `portfolio = _load_portfolio()` line (around line 126), before the query building:
+**Also wire it into the query-time noise check** in `model/relevance_filter.py`. Find the noise check block (around lines 169-174):
 
 ```python
-    # --- Cleanup: remove articles older than 7 days ---
-    try:
-        from datetime import datetime, timezone, timedelta
-        cutoff_ts = int((datetime.now(timezone.utc) - timedelta(days=7)).timestamp())
-        col = get_article_collection()
-        old_articles = col.get(where={"published_ts": {"$lt": cutoff_ts}})
-        old_ids = old_articles.get("ids", [])
-        if old_ids:
-            col.delete(ids=old_ids)
-            log.info(f"Cleanup: removed {len(old_ids)} articles older than 7 days.")
-        else:
-            log.info("Cleanup: no stale articles to remove.")
-    except Exception as e:
-        log.warning(f"Cleanup failed (non-fatal): {e}")
+        if is_noise_article(title):
+            log.debug(f"[NOISE] {title[:70]}")
+            noise_skipped += 1
+            continue
 ```
 
-This is defensive — if it fails, ingestion continues normally. The `$lt` operator is the opposite of the `$gte` used in the relevance filter.
+Add an import at the top of `relevance_filter.py` — update the existing import:
+```python
+from news.noise_filter import is_noise_article, is_speculative_article
+```
+
+Add a speculative check right after the noise check:
+```python
+        if is_speculative_article(title):
+            log.debug(f"[SPECULATIVE] {title[:70]}")
+            noise_skipped += 1
+            continue
+```
+
+This uses the same `noise_skipped` counter — no need for a separate counter at query time.
 
 ---
 
-## Task 5: Update `build_insight_prompt()` with Date Awareness
+## Fix 3: Expand Institutional Disclosure Entity Indicators (low-medium impact)
 
-**File:** `model/model.py`
+**File:** `news/noise_filter.py`
 
-**Change:** Now that article blocks include a `Published:` date, update the insight prompt's STRICT RULES to tell Call 1 to be aware of article dates. Add this rule to the existing `build_insight_prompt()` STRICT RULES block:
+**Problem:** Fund-anchored noise patterns on lines 86, 94, and 102 use entity indicators `LLC|Ltd\.?|L\.P\.|LP|management|capital|advisors?|wealth|asset|partners?|associates?`. International fund names use suffixes not in this list: "SPX Gestao de Recursos **Ltda**", "Gordian Capital Singapore **Pte** Ltd", "Headwater Capital **Co** Ltd". These pass the noise filter and generate useless insights like "Kepler Cheuvreux bought 83,324 shares of JNJ."
 
+**Fix:** Expand the entity indicator list in all three fund-anchored patterns (lines 86, 94, 102). Replace the entity keyword group in each of these three patterns:
+
+**Current** (appears identically in all 3 patterns):
 ```
-- TEMPORAL AWARENESS: Each article includes a "Published:" date. When correlating articles with today's price data, strongly prefer articles published within the last 24 hours. If an article is older than 2 days, note the publish date in the "support" field and mark the insight as potentially stale. Do NOT attribute price movements today to articles published 3+ days ago — the market has already priced in that information.
+\b(?:LLC|Ltd\.?|L\.P\.|LP|management|capital|advisors?|wealth|asset|partners?|associates?)\b
 ```
 
-Add this as a new bullet in the existing STRICT RULES list, right after the QUALITY THRESHOLD rule. Do NOT remove or modify any existing rules.
+**New** (add to all 3 patterns):
+```
+\b(?:LLC|Ltd\.?|Ltda\.?|L\.P\.|LP|Co\.?|Corp\.?|Inc\.?|Pte\.?|GmbH|SA|AG|NV|BV|Pty\.?|management|capital|advisors?|wealth|asset|partners?|associates?|group|fund|trust|holdings?)\b
+```
+
+The additions are: `Ltda\.?` (Portuguese/Spanish), `Co\.?` (common prefix), `Corp\.?`, `Inc\.?`, `Pte\.?` (Singapore), `GmbH` (German), `SA` (French/Spanish), `AG` (German/Swiss), `NV` (Dutch), `BV` (Dutch), `Pty\.?` (Australian), `group`, `fund`, `trust`, `holdings?`.
+
+**Also add one new pattern** to the `_PATTERNS` list for the "Buys Shares of [number]" format where the specific share count in the title is the distinguishing signal. Real corporate news never says "Buys Shares of 10,810 Alphabet":
+
+```python
+    # "Gordian Capital Buys Shares of 10,810 Alphabet" / "Firm Purchases 2,800 Shares of JPMorgan"
+    # The specific share count after "of" distinguishes fund disclosures from corporate M&A.
+    # "Apple Buys Stake in AI Startup" does NOT match (no digit after "of").
+    re.compile(
+        r"\b(?:buys?|purchases?|acquires?)\s+(?:shares?|stake)\s+of\s+[\d,]+\s",
+        re.IGNORECASE,
+    ),
+```
+
+Add this pattern at the end of the `_PATTERNS` list, before the closing `]`.
 
 ---
 
 ## What NOT to Change
 
-- **Do NOT modify `news/noise_filter.py`** — no regex pattern changes.
-- **Do NOT modify `pipeline/html_renderer.py`** — HTML rendering is working.
-- **Do NOT modify `model/embedder.py`** — embeddings are working.
-- **Do NOT modify `storage/vector_store.py`** — ChromaDB wrapper is fine.
-- **Do NOT modify `_build_portfolio_summary()`** — working.
-- **Do NOT modify `_build_movers_section()`** — working (has JSON fallback already).
-- **Do NOT modify `_parse_insights_safe()`** — working.
-- **Do NOT modify `_cap_key_insights()`** — working.
-- **Do NOT modify `_enrich_articles_with_full_text()`** — working.
-- **Do NOT add any new LLM calls or pipeline steps.**
-- **Do NOT change the editorial prompt structure** beyond adding the ticker allowlist rule.
-- **Do NOT change the insight prompt structure** beyond adding the temporal awareness rule.
+- **Do NOT modify `pipeline/html_renderer.py`**
+- **Do NOT modify `model/model.py`** — no LLM prompt changes in this session
+- **Do NOT modify `pipeline/run_test_pipeline.py`** — no pipeline flow changes
+- **Do NOT modify `storage/vector_store.py`**
+- **Do NOT modify `model/embedder.py`**
+- **Do NOT modify the existing patterns** in `_PATTERNS` list beyond expanding the entity indicators in the three fund-anchored patterns (lines 86, 94, 102). Do not remove, reorder, or restructure any existing pattern.
+- **Do NOT modify `_ROUNDUP_PATTERNS`** — those are working correctly.
+- **Do NOT add a "Should You Buy" pattern** — articles like "Apple Just Unveiled the iPhone 17e. Should You Buy, Sell, or Hold AAPL Stock Now?" are legitimate news articles with a clickbait suffix.
 
 ---
 
 ## Validation
 
-After all changes:
-
-**Step 1:** Clear ChromaDB and re-ingest to test cleanup:
+**Step 1:** Clear ChromaDB and re-ingest:
 ```bash
+rm -rf chroma_store/
 python news/news_ingest_pipeline.py
 ```
-Check logs for "Cleanup: removed N articles older than 7 days" or "no stale articles to remove."
 
-**Step 2:** Run the full pipeline:
+Check the ingestion log for:
+- `speculative-filtered` count in the final summary — should be 3-8 articles per run
+- Verify known speculative titles are caught: "Can Nvidia Stock Reach $10 Trillion..." should appear as "Filtering speculative:"
+- Verify legitimate titles are NOT caught: "Apple Just Unveiled the iPhone 17e..." should NOT appear in any filter log
+
+**Step 2:** Run the pipeline:
 ```bash
 python pipeline/run_test_pipeline.py
 ```
 
-**Step 3:** Check `logs/pipeline_runs/` for the latest run log. Verify:
-1. **Time filter log line appears:** "Time filter: X articles within last 36h (of Y total in store)" — X should be ≤ Y, and the difference represents old articles excluded.
-2. **Article blocks include dates:** In the insights log (`logs/insights/`), article blocks should now show `Published: 2026-03-11T...` dates.
-3. **No non-portfolio tickers in Key Insights:** Check the digest output in `logs/digests/`. MU, AMAT, and any other non-portfolio tickers should be absent from Key Insights and News That Mattered.
-4. **Movers drivers match today's context:** RKLB's driver should reference today-relevant information, not "shares dropped 3.6% during mid-day trading" from a different day.
-5. **Digest is shorter and higher quality:** With only ~36h of articles instead of the full archive, you should see fewer articles passing relevance (likely 20-30 instead of 40), leading to a tighter, more focused digest.
+Check `logs/pipeline_runs/` for the latest run log. Verify:
+1. **Broad-match penalties appear in logs:** Lines like `[FAIL] similarity=0.764 (broad:-0.04) match='S&P 500'` should show articles that previously passed now failing due to the penalty.
+2. **Fewer than 40 articles pass relevance** on typical days — the combination of time filter (from previous session) + broad penalty + speculative filter should reduce the passing count to 25-35, all higher quality.
+3. **No speculative articles in the article list:** Titles containing "Can X Reach", "Where Will X Be", "If You Invested" should appear as `[SPECULATIVE]` skips, not `[PASS]`.
+4. **No fund disclosure articles:** "SPX Gestao de Recursos Ltda" and "Gordian Capital Singapore Pte Ltd" titles should appear as `[NOISE]` skips.
+5. **Key Insights quality improved:** No more "QQQ holds approximately 100 stocks" type insights. Each bullet should contain specific, actionable, recent facts.
+
+**Step 3:** Open the HTML email in `logs/digests/html/` and read it as if you were the user. Every Key Insight should be a fact you'd want to know about your holdings. Every News story should be genuinely newsworthy. If you see generic commentary or speculative projections, check which article produced it and whether it should have been filtered.
 
 ---
 
@@ -265,11 +289,6 @@ python pipeline/run_test_pipeline.py
 
 | File | Action | Details |
 |------|--------|---------|
-| `model/relevance_filter.py` | Modify `find_relevant_articles_from_context()` | Add `max_age_hours` param, time-window `.get()` with `where` clause on `published_ts`, add datetime imports, add log line showing filtered vs total count |
-| `pipeline/run_test_pipeline.py` | Modify `format_article_blocks()` | Add `Published: {published_iso}` line to each article block |
-| `pipeline/run_test_pipeline.py` | Modify editorial call site | Build `portfolio_ticker_list` string from portfolio, pass as new param to `generate_editorial_digest()` |
-| `model/model.py` | Modify `build_editorial_prompt()` | Add `portfolio_tickers` param, add PORTFOLIO TICKER ALLOWLIST rule to STRICT RULES |
-| `model/model.py` | Modify `generate_editorial_digest()` | Add `portfolio_tickers` param, pass through to prompt builder |
-| `model/model.py` | Modify `build_insight_prompt()` | Add TEMPORAL AWARENESS rule to existing STRICT RULES block |
-| `news/news_ingest_pipeline.py` | Modify `ingest_daily_news()` | Add 7-day stale article cleanup at start of function |
-| `CLAUDE.md` | Update | Add time-window filter and ticker allowlist to completed items |
+| `model/relevance_filter.py` | Add broad-match penalty | Define `_BROAD_MATCH_TERMS` set and `BROAD_MATCH_PENALTY` constant. Apply penalty to `best_similarity` before threshold check. Log the penalty. Import `is_speculative_article` and add query-time speculative filter. |
+| `news/noise_filter.py` | Add speculative patterns | New `_SPECULATIVE_PATTERNS` list + `is_speculative_article()` function. Expand entity indicators in 3 fund-anchored patterns. Add "Buys Shares of [number]" pattern. |
+| `news/news_ingest_pipeline.py` | Wire speculative filter | Import `is_speculative_article`, add filter check after roundup check, add counter, update summary log. |
