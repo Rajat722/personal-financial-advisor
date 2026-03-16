@@ -1,0 +1,21 @@
+{
+    "user_id": "tester1",
+    "name": "Tester One",
+    "email": "tester1@example.com",
+    "delivery_time": "19:00",
+    "total_investment": 50000,
+    "equities": [
+        {"ticker": "AAPL", "company": "Apple", "allocation": 5000, "shares": 12, "avg_cost_basis": 185.00, "sector": "consumer electronics", "asset_class": "equity", "news_tier": 1},
+        {"ticker": "NVDA", "company": "Nvidia", "allocation": 5000, "shares": 15, "avg_cost_basis": 135.00, "sector": "semiconductors", "asset_class": "equity", "news_tier": 1},
+        {"ticker": "AMZN", "company": "Amazon", "allocation": 5000, "shares": 10, "avg_cost_basis": 180.00, "sector": "e-commerce / cloud", "asset_class": "equity", "news_tier": 1},
+        {"ticker": "GOOG", "company": "Alphabet", "allocation": 5000, "shares": 12, "avg_cost_basis": 155.00, "sector": "advertising / cloud", "asset_class": "equity", "news_tier": 1},
+        {"ticker": "MSFT", "company": "Microsoft", "allocation": 5000, "shares": 6, "avg_cost_basis": 400.00, "sector": "enterprise software", "asset_class": "equity", "news_tier": 1},
+        {"ticker": "CRWD", "company": "CrowdStrike", "allocation": 5000, "shares": 12, "avg_cost_basis": 200.00, "sector": "cybersecurity", "asset_class": "equity", "news_tier": 2},
+        {"ticker": "PLTR", "company": "Palantir", "allocation": 5000, "shares": 80, "avg_cost_basis": 25.00, "sector": "data analytics", "asset_class": "equity", "news_tier": 2},
+        {"ticker": "COIN", "company": "Coinbase", "allocation": 5000, "shares": 20, "avg_cost_basis": 180.00, "sector": "crypto exchange", "asset_class": "equity", "news_tier": 2},
+        {"ticker": "SPY", "company": "SPDR S&P 500 ETF Trust", "allocation": 5000, "shares": 5, "avg_cost_basis": 460.00, "sector": "broad market index", "asset_class": "etf", "news_tier": 3},
+        {"ticker": "QQQ", "company": "Invesco QQQ Trust", "allocation": 5000, "shares": 5, "avg_cost_basis": 400.00, "sector": "tech index", "asset_class": "etf", "news_tier": 3}
+    ],
+    "sectors": ["cloud computing", "AI", "semiconductors", "cybersecurity"],
+    "indices": ["S&P 500", "Nasdaq"]
+}

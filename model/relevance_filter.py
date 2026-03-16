@@ -86,6 +86,8 @@ _TICKER_DESCRIPTIONS: dict[str, str] = {
     "T": "T AT&T telecommunications wireless 5G broadband TV DirecTV phone carrier",
     "SPY": "SPY SPDR S&P 500 ETF index fund large-cap US equities market benchmark",
     "QQQ": "QQQ Invesco Nasdaq-100 ETF technology index fund growth stocks",
+    "PLTR": "PLTR Palantir Technologies data analytics software government defense AI big data",
+    "COIN": "COIN Coinbase cryptocurrency exchange bitcoin ethereum crypto trading digital assets",
 }
 
 _SECTOR_DESCRIPTIONS: dict[str, str] = {
@@ -116,12 +118,20 @@ def _enrich_term(term: str, term_type: str) -> str:
 
 
 # --- Load and index portfolio terms from JSON ---
-def index_portfolio_terms(path: str | None = None) -> None:
-    """Load portfolio JSON and upsert enriched descriptions for all tickers, sectors, and indices."""
-    if path is None:
-        path = Path(__file__).resolve().parent.parent / "user_portfolio" / "portfolio.json"
-    with open(path, "r") as f:
-        data = json.load(f)
+def index_portfolio_terms(path: str | None = None, portfolio_data: dict | None = None) -> None:
+    """Load portfolio and upsert enriched descriptions for all tickers, sectors, and indices.
+
+    Args:
+        path: Path to a single portfolio JSON file (legacy mode).
+        portfolio_data: Pre-built portfolio dict (multi-user mode). Takes precedence over path.
+    """
+    if portfolio_data is not None:
+        data = portfolio_data
+    else:
+        if path is None:
+            path = Path(__file__).resolve().parent.parent / "user_portfolio" / "portfolio.json"
+        with open(path, "r") as f:
+            data = json.load(f)
 
     equities = data.get("equities", [])
     sectors = [s.lower() for s in data.get("sectors", [])]
@@ -173,8 +183,38 @@ def _dedupe_by_title_similarity(articles: list, threshold: float = 0.85) -> list
     return kept
 
 
+def build_user_allowed_terms(user_portfolio: dict) -> set[str]:
+    """Build the set of portfolio term strings for per-user article filtering.
+
+    These match the document strings stored in ChromaDB's portfolio collection:
+    ticker symbols (uppercase), company names (mixed case), sectors (lowercase),
+    and index names (original case). Both original and lowercase versions are
+    included for case-insensitive matching.
+    """
+    terms: set[str] = set()
+    for eq in user_portfolio.get("equities", []):
+        ticker = eq.get("ticker", "").upper()
+        company = eq.get("company", "")
+        if ticker:
+            terms.add(ticker)
+            terms.add(ticker.lower())
+        if company:
+            terms.add(company)
+            terms.add(company.lower())
+    for sector in user_portfolio.get("sectors", []):
+        terms.add(sector)
+        terms.add(sector.lower())
+    for index in user_portfolio.get("indices", []):
+        terms.add(index)
+        terms.add(index.lower())
+    return terms
+
+
 # --- Retrieve relevant articles from the articles collection ---
-def find_relevant_articles_from_context(max_age_hours: int = 36) -> list:
+def find_relevant_articles_from_context(
+    max_age_hours: int = 36,
+    allowed_terms: set[str] | None = None,
+) -> list:
     """Return all articles whose embeddings match the portfolio above the similarity threshold.
 
     Only considers articles published within the last max_age_hours (default 36h).
@@ -230,12 +270,24 @@ def find_relevant_articles_from_context(max_age_hours: int = 36) -> list:
             continue
 
         try:
-            results = find_similar_in_portfolio(embedding, top_k=3)
+            results = find_similar_in_portfolio(embedding, top_k=5)
             distances = results.get("distances", [[]])[0]
             portfolio_docs = results.get("documents", [[]])[0]
 
             if not distances:
                 continue
+
+            # If allowed_terms is set, filter to only matches in this user's portfolio.
+            if allowed_terms is not None:
+                filtered = [
+                    (d, doc) for d, doc in zip(distances, portfolio_docs)
+                    if doc.lower() in allowed_terms or doc in allowed_terms
+                ]
+                if not filtered:
+                    continue
+                distances, portfolio_docs = zip(*filtered)
+                distances = list(distances)
+                portfolio_docs = list(portfolio_docs)
 
             best_distance = min(distances)
             best_similarity = 1.0 - best_distance

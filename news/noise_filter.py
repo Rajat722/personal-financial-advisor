@@ -255,6 +255,10 @@ _PRICE_ALERT_PATTERNS = [
     # "Trading 1.3% Higher — Time to Buy?"
     # "Down 4% — Time to Sell?"
     re.compile(r"[-\u2013\u2014]\s*time\s+to\s+(?:buy|sell)\??\s*$", re.IGNORECASE),
+
+    # "Apple Trading Down 2.2% – Should You Sell?"
+    # "Stock Is Down 10% — Should You Buy?"
+    re.compile(r"\bshould\s+you\s+(?:buy|sell)\??\s*$", re.IGNORECASE),
 ]
 
 

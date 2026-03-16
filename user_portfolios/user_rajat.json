@@ -1,0 +1,136 @@
+{
+    "user_id": "rajat",
+    "name": "Rajat",
+    "email": "rajat@example.com",
+    "delivery_time": "19:00",
+    "total_investment": 100000,
+    "equities": [
+        {
+            "ticker": "AAPL",  "company": "Apple",
+            "allocation": 4200, "shares": 22,   "avg_cost_basis": 152.00,
+            "sector": "consumer electronics",   "asset_class": "equity", "news_tier": 1
+        },
+        {
+            "ticker": "MSFT",  "company": "Microsoft",
+            "allocation": 4200, "shares": 10,   "avg_cost_basis": 375.00,
+            "sector": "enterprise software",    "asset_class": "equity", "news_tier": 1
+        },
+        {
+            "ticker": "NVDA",  "company": "Nvidia",
+            "allocation": 4200, "shares": 28,   "avg_cost_basis": 120.00,
+            "sector": "semiconductors",         "asset_class": "equity", "news_tier": 1
+        },
+        {
+            "ticker": "AMZN",  "company": "Amazon",
+            "allocation": 4200, "shares": 20,   "avg_cost_basis": 170.00,
+            "sector": "e-commerce / cloud",     "asset_class": "equity", "news_tier": 1
+        },
+        {
+            "ticker": "GOOG",  "company": "Alphabet",
+            "allocation": 4200, "shares": 24,   "avg_cost_basis": 148.00,
+            "sector": "advertising / cloud",    "asset_class": "equity", "news_tier": 1
+        },
+        {
+            "ticker": "TSLA",  "company": "Tesla",
+            "allocation": 4200, "shares": 16,   "avg_cost_basis": 220.00,
+            "sector": "electric vehicles",      "asset_class": "equity", "news_tier": 1
+        },
+        {
+            "ticker": "META",  "company": "Meta Platforms",
+            "allocation": 4200, "shares": 9,    "avg_cost_basis": 440.00,
+            "sector": "social media",           "asset_class": "equity", "news_tier": 1
+        },
+        {
+            "ticker": "BRK-A", "company": "Berkshire Hathaway",
+            "allocation": 4200, "shares": 0.006, "avg_cost_basis": 618000.00,
+            "sector": "financial services",     "asset_class": "equity", "news_tier": 2
+        },
+        {
+            "ticker": "JPM",   "company": "JPMorgan Chase",
+            "allocation": 4200, "shares": 27,   "avg_cost_basis": 155.00,
+            "sector": "banking",                "asset_class": "equity", "news_tier": 2
+        },
+        {
+            "ticker": "COST",  "company": "Costco",
+            "allocation": 4200, "shares": 6,    "avg_cost_basis": 680.00,
+            "sector": "retail",                 "asset_class": "equity", "news_tier": 2
+        },
+        {
+            "ticker": "CRWD",  "company": "CrowdStrike",
+            "allocation": 4375, "shares": 21,   "avg_cost_basis": 192.00,
+            "sector": "cybersecurity",          "asset_class": "equity", "news_tier": 2
+        },
+        {
+            "ticker": "SHOP",  "company": "Shopify",
+            "allocation": 4375, "shares": 55,   "avg_cost_basis": 73.00,
+            "sector": "e-commerce software",    "asset_class": "equity", "news_tier": 2
+        },
+        {
+            "ticker": "DKNG",  "company": "DraftKings",
+            "allocation": 4375, "shares": 170,  "avg_cost_basis": 26.00,
+            "sector": "sports betting",         "asset_class": "equity", "news_tier": 2
+        },
+        {
+            "ticker": "NET",   "company": "Cloudflare",
+            "allocation": 4375, "shares": 48,   "avg_cost_basis": 83.00,
+            "sector": "cybersecurity / CDN",    "asset_class": "equity", "news_tier": 2
+        },
+        {
+            "ticker": "RKLB",  "company": "Rocket Lab",
+            "allocation": 3500, "shares": 340,  "avg_cost_basis": 9.80,
+            "sector": "aerospace",              "asset_class": "equity", "news_tier": 2
+        },
+        {
+            "ticker": "CELH",  "company": "Celsius Holdings",
+            "allocation": 3500, "shares": 55,   "avg_cost_basis": 62.00,
+            "sector": "consumer beverages",     "asset_class": "equity", "news_tier": 3
+        },
+        {
+            "ticker": "AXON",  "company": "Axon Enterprise",
+            "allocation": 3500, "shares": 20,   "avg_cost_basis": 165.00,
+            "sector": "law enforcement tech",   "asset_class": "equity", "news_tier": 2
+        },
+        {
+            "ticker": "JNJ",   "company": "Johnson & Johnson",
+            "allocation": 3750, "shares": 26,   "avg_cost_basis": 155.00,
+            "sector": "healthcare / pharma",    "asset_class": "equity", "news_tier": 3
+        },
+        {
+            "ticker": "PG",    "company": "Procter & Gamble",
+            "allocation": 3750, "shares": 25,   "avg_cost_basis": 148.00,
+            "sector": "consumer goods",         "asset_class": "equity", "news_tier": 3
+        },
+        {
+            "ticker": "KO",    "company": "Coca-Cola",
+            "allocation": 3750, "shares": 60,   "avg_cost_basis": 58.00,
+            "sector": "consumer beverages",     "asset_class": "equity", "news_tier": 3
+        },
+        {
+            "ticker": "VZ",    "company": "Verizon",
+            "allocation": 3750, "shares": 105,  "avg_cost_basis": 38.00,
+            "sector": "telecommunications",     "asset_class": "equity", "news_tier": 3
+        },
+        {
+            "ticker": "O",     "company": "Realty Income",
+            "allocation": 3750, "shares": 68,   "avg_cost_basis": 53.00,
+            "sector": "real estate",            "asset_class": "reit",   "news_tier": 3
+        },
+        {
+            "ticker": "T",     "company": "AT&T",
+            "allocation": 3750, "shares": 225,  "avg_cost_basis": 16.50,
+            "sector": "telecommunications",     "asset_class": "equity", "news_tier": 3
+        },
+        {
+            "ticker": "SPY",   "company": "SPDR S&P 500 ETF Trust",
+            "allocation": 3750, "shares": 8,    "avg_cost_basis": 450.00,
+            "sector": "broad market index",     "asset_class": "etf",    "news_tier": 3
+        },
+        {
+            "ticker": "QQQ",   "company": "Invesco QQQ Trust",
+            "allocation": 3750, "shares": 9,    "avg_cost_basis": 395.00,
+            "sector": "tech index",             "asset_class": "etf",    "news_tier": 3
+        }
+    ],
+    "sectors": ["cloud computing", "AI", "semiconductors", "large-cap tech", "Pharmaceuticals"],
+    "indices": ["S&P 500", "Nasdaq", "Russell 2000"]
+}

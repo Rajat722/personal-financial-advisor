@@ -1,294 +1,377 @@
-# Article Quality: Broad-Match Penalty + Speculative Filter + Institutional Disclosure Fix
+# Per-User Article Filtering + Call 1: Restore Digest Quality
 
 Read `CLAUDE.md` first, then read this entire prompt before making any changes.
 
 ---
 
-## Context
+## Why This Change
 
-The pipeline produces a 40-article window for the LLM. Analysis of the March 11 digest shows roughly 12-15 of those 40 articles are useful; the rest are speculative opinion pieces, institutional fund disclosures, or generic market commentary that matched broad portfolio terms ("S&P 500", "large-cap tech", "Invesco QQQ Trust") rather than specific tickers.
+After the multi-user refactor, digest quality degraded. The root cause: article relevance filtering and Call 1 (analyst insights) run against the **master portfolio** (union of all users' tickers) instead of each user's individual portfolio.
 
-Three fixes, in priority order. All three are independent — each one improves quality on its own.
+This causes three problems:
+1. **Article dilution:** Articles about tester1-only holdings (PLTR, COIN) compete for the shared 40-article cap, displacing articles about rajat-only holdings (DKNG, CELH, RKLB, etc.).
+2. **LLM cross-contamination:** Call 1 processes 27 tickers' worth of articles in one prompt, increasing attention spread and causing data leakage between tickers (e.g., AXON's consensus PT appearing in CRWD's entry).
+3. **Wasted insight slots:** Insights about non-user tickers are generated and then discarded by the editorial prompt's ticker allowlist.
+
+**The fix:** Move article filtering, scraping, and Call 1 from the shared section into the per-user loop. Each user gets their own 40 articles filtered against their own portfolio, and their own Call 1 — exactly like the single-user pipeline worked before.
+
+Stock data and earnings fetching remain shared (expensive, API-bound). News ingestion remains shared (NewsData API credits).
 
 ---
 
-## Fix 1: Broad-Term Similarity Penalty (highest impact)
+## Architecture After This Change
+
+```
+SHARED (runs once):
+  1. Load all users → build master portfolio
+  2. Index master portfolio terms in ChromaDB
+  3. Fetch shared stock data for ALL tickers
+  4. Fetch shared earnings for ALL tickers
+
+PER-USER (loops over each user):
+  5. Find relevant articles (THIS user's allowed terms only)
+  6. Scrape full article text
+  7. Format article blocks
+  8. Call 1 — Analyst (flash-lite): THIS user's articles + THIS user's prices
+  9. Build Portfolio Snapshot + Movers table
+  10. Call 2 — Editor (flash): THIS user's insights + snapshot + movers
+  11. Render HTML email
+```
+
+---
+
+## Task 1: Add Per-User Portfolio Filtering to `find_relevant_articles_from_context()`
 
 **File:** `model/relevance_filter.py`
 
-**Problem:** Articles matching broad portfolio terms ("S&P 500", "Nasdaq", "large-cap tech", "cloud computing", "ai", "semiconductors", "Pharmaceuticals", "Invesco QQQ Trust", "SPDR S&P 500 ETF Trust") score 0.75-0.78 similarity and fill 12 of 40 article slots with generic market commentary. An article titled "Billionaires Are Loading Up on Index Funds" at 0.762 matching "S&P 500" beats a DKNG earnings article at 0.758 matching "DraftKings".
+The function currently queries the `portfolio` ChromaDB collection which contains all users' tickers. We need it to only consider matches against terms belonging to the specific user.
 
-**Fix:** After calculating `best_similarity`, apply a penalty when the `best_match` is a broad term rather than a specific ticker or company name. This makes broad-match articles need a higher raw similarity score to compete for the 40 slots.
-
-The `best_match` field contains the raw `document` string stored in the portfolio ChromaDB collection. For tickers this is the ticker symbol (e.g., `"AAPL"`, `"COST"`). For company names it's the company string (e.g., `"Apple"`, `"Costco"`). For sectors it's the raw sector string (e.g., `"cloud computing"`, `"large-cap tech"`). For indices it's the raw index string (e.g., `"S&P 500"`, `"Nasdaq"`).
-
-**Step 1a:** Define the set of broad terms that should be penalized. Add this constant near the top of the file, after `MAX_RELEVANT_ARTICLES`:
+**Step 1a:** Add a helper function to build a user's allowed terms set. Place this right before `find_relevant_articles_from_context()`:
 
 ```python
-# Broad portfolio terms that match too many articles. Articles whose best match
-# is one of these get a similarity penalty so ticker-specific articles are preferred.
-# Includes: all sector descriptions, all index descriptions, and ETF company names
-# (QQQ and SPY match everything tech/market related).
-_BROAD_MATCH_TERMS: set[str] = {
-    # Sectors (from portfolio.json → _SECTOR_DESCRIPTIONS keys)
-    "cloud computing", "ai", "semiconductors", "large-cap tech", "pharmaceuticals",
-    # Indices (from portfolio.json → _INDEX_DESCRIPTIONS keys)
-    "s&p 500", "nasdaq", "russell 2000",
-    # ETF company names (stored as documents in portfolio collection)
-    "invesco qqq trust", "spdr s&p 500 etf trust",
-}
+def build_user_allowed_terms(user_portfolio: dict) -> set[str]:
+    """Build the set of portfolio term strings for per-user article filtering.
 
-# Penalty applied to similarity score for broad-term matches.
-# A broad-match article needs raw similarity of ~0.79+ to compete with
-# a ticker-specific article at 0.75. Tuned to let major market events
-# through (crash articles score 0.85+) while filtering generic commentary.
-BROAD_MATCH_PENALTY: float = 0.04
+    These match the document strings stored in ChromaDB's portfolio collection:
+    ticker symbols (uppercase), company names (mixed case), sectors (lowercase),
+    and index names (original case). Both original and lowercase versions are
+    included for case-insensitive matching.
+    """
+    terms: set[str] = set()
+    for eq in user_portfolio.get("equities", []):
+        ticker = eq.get("ticker", "").upper()
+        company = eq.get("company", "")
+        if ticker:
+            terms.add(ticker)
+            terms.add(ticker.lower())
+        if company:
+            terms.add(company)
+            terms.add(company.lower())
+    for sector in user_portfolio.get("sectors", []):
+        terms.add(sector)
+        terms.add(sector.lower())
+    for index in user_portfolio.get("indices", []):
+        terms.add(index)
+        terms.add(index.lower())
+    return terms
 ```
 
-**Step 1b:** Apply the penalty inside the scoring loop. In the `find_relevant_articles_from_context()` function, right after `best_match` is computed (after line 186) and BEFORE the threshold check (line 194), add:
+**Step 1b:** Update the function signature to accept `allowed_terms`:
 
 ```python
-            # Penalize broad-term matches so ticker-specific articles are preferred
-            is_broad = best_match.lower() in _BROAD_MATCH_TERMS
-            effective_similarity = best_similarity - BROAD_MATCH_PENALTY if is_broad else best_similarity
+def find_relevant_articles_from_context(
+    max_age_hours: int = 36,
+    allowed_terms: set[str] | None = None,
+) -> list:
 ```
 
-Then change the threshold check and the appended data to use `effective_similarity`:
+**Step 1c:** Change `top_k=3` to `top_k=5` on the `find_similar_in_portfolio` call (currently line 243). With the filter removing non-user matches, we need more candidates.
+
+**Step 1d:** Add the allowed_terms filter inside the scoring loop. Place this block right after `if not distances: continue` and right before `best_distance = min(distances)`:
 
 ```python
-            log.info(
-                f"[{'PASS' if effective_similarity >= SIMILARITY_THRESHOLD else 'FAIL'}] "
-                f"similarity={best_similarity:.3f}{' (broad:-' + str(BROAD_MATCH_PENALTY) + ')' if is_broad else ''} "
-                f"match='{best_match}' | {title[:70]}"
+            # If allowed_terms is set, filter to only matches in this user's portfolio.
+            if allowed_terms is not None:
+                filtered = [
+                    (d, doc) for d, doc in zip(distances, portfolio_docs)
+                    if doc.lower() in allowed_terms or doc in allowed_terms
+                ]
+                if not filtered:
+                    continue
+                distances, portfolio_docs = zip(*filtered)
+                distances = list(distances)
+                portfolio_docs = list(portfolio_docs)
+```
+
+**Do NOT change** the time window, noise/speculative/price-alert checks, broad-match penalty, sorting, capping, or dedup logic.
+
+---
+
+## Task 2: Restructure `run_pipeline()` and `_generate_user_digest()`
+
+**File:** `pipeline/run_test_pipeline.py`
+
+**Step 2a:** Update imports — add `build_user_allowed_terms`:
+
+```python
+from model.relevance_filter import find_relevant_articles_from_context, index_portfolio_terms, build_user_allowed_terms
+```
+
+**Step 2b:** Replace the entire `run_pipeline()` function. The shared section shrinks — only user loading, portfolio indexing, stock data, and earnings remain shared:
+
+```python
+def run_pipeline(force: bool = False) -> None:
+    log_path = _attach_run_log()
+    logger.info(f"Run log: {log_path}")
+
+    # Weekend / market-closed detection
+    now_et = datetime.now(_EST)
+    day_of_week = now_et.weekday()
+    if day_of_week >= 5:
+        if not force:
+            logger.warning(
+                f"Today is {now_et.strftime('%A')} — markets are closed. "
+                f"Skipping pipeline. Use --force to run anyway."
+            )
+            return
+        else:
+            logger.warning(
+                f"Today is {now_et.strftime('%A')} — running anyway due to --force flag."
             )
 
-            if effective_similarity >= SIMILARITY_THRESHOLD:
-                relevant_articles.append({
-                    "doc_id": doc_id,
-                    "text": text,
-                    "metadata": metadata,
-                    "scores": distances,
-                    "best_match": best_match,
-                    "best_similarity": effective_similarity,
-                })
+    # ================================================================
+    # SHARED STEPS (run once)
+    # ================================================================
+
+    users = load_all_users()
+    if not users:
+        logger.error("No users found in user_portfolios/. Create user_*.json files first.")
+        return
+    master_portfolio = build_master_portfolio(users)
+    all_tickers = get_all_tickers(users)
+    logger.info(f"Loaded {len(users)} user(s), {len(all_tickers)} unique tickers.")
+
+    # Index master portfolio terms
+    portfolio_collection = get_portfolio_collection()
+    existing_count = portfolio_collection.count()
+    expected_terms = len(master_portfolio["equities"]) * 2 + len(master_portfolio["sectors"]) + len(master_portfolio["indices"])
+    if existing_count >= expected_terms:
+        logger.info(f"Portfolio already indexed ({existing_count} terms). Skipping re-index.")
+    else:
+        logger.info(f"Indexing master portfolio terms ({existing_count} → ~{expected_terms} expected)...")
+        index_portfolio_terms(portfolio_data=master_portfolio)
+        logger.info(f"Portfolio indexed: {portfolio_collection.count()} terms.")
+
+    # Fetch shared stock data + earnings
+    shared_stock_data = fetch_shared_stock_data(all_tickers)
+    shared_earnings = fetch_shared_earnings(master_portfolio["equities"])
+
+    # ================================================================
+    # PER-USER DIGEST GENERATION
+    # ================================================================
+    logger.info("=" * 60)
+    logger.info(f"GENERATING DIGESTS FOR {len(users)} USER(S)")
+    logger.info("=" * 60)
+
+    successful = 0
+    failed = 0
+    for user in users:
+        try:
+            _generate_user_digest(
+                user=user,
+                shared_stock_data=shared_stock_data,
+                shared_earnings=shared_earnings,
+            )
+            successful += 1
+        except Exception as e:
+            logger.error(f"[{user['user_id']}] Unhandled error: {e}")
+            failed += 1
+
+    logger.info(f"Pipeline complete. {successful}/{len(users)} digests generated"
+                f"{f', {failed} failed' if failed else ''}.")
 ```
 
-This way the log shows both the raw score AND the penalty, so you can verify it's working. Articles are sorted and capped by `effective_similarity`, meaning broad-match articles naturally fall to the bottom of the 40-slot window.
-
-**Do NOT change anything else in this function** — the time-window filter, deduplication, noise check, and capping logic all stay the same.
-
----
-
-## Fix 2: Speculative/Opinion Article Patterns (medium impact)
-
-**File:** `news/noise_filter.py`
-
-**Problem:** SEO articles with speculative headlines ("Can Nvidia Stock Reach $10 Trillion?", "Where Will Realty Income Be in 10 Years?", "If You Invested $1000 in Apple 20 Years Ago") contain historical stats and opinion but zero fresh news. They match portfolio tickers perfectly (high similarity scores) and waste LLM context.
-
-**Fix:** Add a new `_SPECULATIVE_PATTERNS` list and a new `is_speculative_article()` function, following the same pattern as the existing `_ROUNDUP_PATTERNS` / `is_generic_roundup()`.
-
-Add this after the existing `_ROUNDUP_PATTERNS` list and `is_generic_roundup()` function (after line 173):
+**Step 2c:** Replace the entire `_generate_user_digest()` function with the version below. It now handles everything from article filtering through HTML rendering. The function signature changes — it no longer receives `insights_response`, `article_titles_urls`, or `relevant_article_count` because those are now generated per-user inside the function:
 
 ```python
-# ---------------------------------------------------------------------------
-# Speculative / opinion / historical return article filter
-# ---------------------------------------------------------------------------
-# These are SEO articles built around a speculative question or a historical
-# return calculation. They contain no fresh news — just projections, "what-if"
-# scenarios, or backward-looking performance data. They match portfolio tickers
-# with high similarity but generate zero actionable insights.
+def _generate_user_digest(
+    user: dict,
+    shared_stock_data: dict,
+    shared_earnings: list[dict],
+) -> None:
+    """Generate a complete personalized digest for one user.
 
-_SPECULATIVE_PATTERNS = [
-    # "Can Nvidia Stock Reach a $10 Trillion Market Cap by 2030?"
-    # "Can Tesla Reach $500 by Year-End?"
-    re.compile(r"\bcan\s+.{1,40}\breach\b", re.IGNORECASE),
-
-    # "Where Will Realty Income Be in 10 Years?"
-    # "Where Will Apple Stock Be in 5 Years?"
-    re.compile(r"\bwhere\s+will\s+.{1,40}\bbe\s+in\s+\d+\s+years?\b", re.IGNORECASE),
-
-    # "Is Tesla Stock Going to $1,000?"
-    # "Is NVDA Going to $200?"
-    re.compile(r"\bis\s+.{1,30}\bgoing\s+to\s+\$", re.IGNORECASE),
-
-    # "If You Invested $1000 In Apple 20 Years Ago"
-    # "If You Had Invested $500 in Tesla Stock 5 Years Ago"
-    re.compile(r"\bif\s+you\s+(?:had\s+)?invested\b", re.IGNORECASE),
-
-    # "Here's How Much You Would Have Made Owning Microsoft Stock"
-    # "How Much $1000 Invested In Apple Would Be Worth Today"
-    re.compile(r"\bhow\s+much\s+.{0,30}\b(?:invested|made|worth)\b", re.IGNORECASE),
-
-    # "Here's How Much $1000 Invested In Apple 20 Years Ago Would Be Worth Today"
-    re.compile(r"\$\d+\s+invested\s+in\b", re.IGNORECASE),
-
-    # "Forget QQQ: 3 Sector ETFs Quietly Outperforming Tech"
-    # "Forget Tesla: Here's a Better EV Stock"
-    re.compile(r"^forget\s+\w+\s*:", re.IGNORECASE),
-]
-
-
-def is_speculative_article(title: str) -> bool:
-    """Return True if the article is a speculative opinion/projection piece with no fresh news.
-
-    False positive guard: checked against known good articles —
-    'Apple Just Unveiled the iPhone 17e. Should You Buy, Sell, or Hold AAPL Stock Now?' does NOT match
-    because it lacks the speculative question patterns above.
-    'Nvidia Stock Reaches All-Time High' does NOT match 'can .* reach' because it lacks 'can'.
-    'Is Amazon Stock a Long-Term Buy?' does NOT match 'is .* going to $' because it lacks 'going to $'.
+    Per-user: article filtering, scraping, Call 1, Call 2, HTML render.
+    Shared data (stock prices, earnings) passed in to avoid redundant fetches.
     """
-    return any(p.search(title) for p in _SPECULATIVE_PATTERNS)
-```
+    user_id = user["user_id"]
+    user_portfolio = {
+        "equities": user["equities"],
+        "sectors": user.get("sectors", []),
+        "indices": user.get("indices", []),
+        "total_investment": user.get("total_investment", 0),
+    }
+    logger.info(f"[{user_id}] ── Starting digest ({len(user_portfolio['equities'])} holdings) ──")
 
-**Then wire it into the ingestion pipeline.** In `news/news_ingest_pipeline.py`, the speculative filter should be called right after the existing `is_generic_roundup()` check. Find the block (around lines 201-206):
+    # === Find relevant articles for THIS user ===
+    allowed_terms = build_user_allowed_terms(user_portfolio)
+    logger.info(f"[{user_id}] Filtering articles ({len(allowed_terms)} allowed terms)...")
+    relevant_articles = find_relevant_articles_from_context(allowed_terms=allowed_terms)
+    logger.info(f"[{user_id}] {len(relevant_articles)} relevant articles found.")
 
-```python
-        # Roundup filter: generic SEO stock-list articles ("Best Tech Stocks To Watch Today")
-        if _is_generic_roundup(article.title):
-            log.debug(f"Filtering roundup: {article.title}")
-            roundup_count += 1
-            continue
-```
+    if not relevant_articles:
+        logger.warning(f"[{user_id}] No relevant articles. Skipping.")
+        return
 
-Add a new block immediately after it:
+    # === Scrape full article text ===
+    logger.info(f"[{user_id}] Scraping full text for {len(relevant_articles)} articles...")
+    enriched_count = _enrich_articles_with_full_text(relevant_articles)
+    logger.info(f"[{user_id}] Scraped {enriched_count}/{len(relevant_articles)} articles.")
 
-```python
-        # Speculative filter: opinion/projection/historical return articles
-        if _is_speculative_article(article.title):
-            log.debug(f"Filtering speculative: {article.title}")
-            speculative_count += 1
-            continue
-```
+    # === Format article blocks ===
+    article_blocks = format_article_blocks(relevant_articles)
+    article_titles_urls = _build_article_titles_urls(relevant_articles)
 
-Add the import at the top of `news_ingest_pipeline.py` — update the existing import line:
-```python
-from news.noise_filter import is_noise_article as _is_noise_article, is_generic_roundup as _is_generic_roundup, is_speculative_article as _is_speculative_article
-```
+    # === Filter shared data to this user's tickers ===
+    user_tickers = {e["ticker"] for e in user_portfolio["equities"]}
+    user_stock_data = {t: df for t, df in shared_stock_data.items() if t in user_tickers}
+    stock_summary_json = json.dumps(format_time_series_table(user_stock_data), indent=2)
 
-Add `speculative_count = 0` near the other counter initializations (around line 163).
+    user_earnings = [e for e in shared_earnings if e["ticker"] in user_tickers]
+    earnings_context = _format_earnings_context(user_earnings)
+    if user_earnings:
+        logger.info(f"[{user_id}] Earnings: {len(user_earnings)} event(s)")
+    else:
+        logger.info(f"[{user_id}] No earnings events in window.")
 
-Add the speculative count to the final log summary (around line 245):
-```python
-    log.info(
-        f"Ingestion complete: {stored_count} stored | "
-        f"{noise_count} noise-filtered | "
-        f"{roundup_count} roundup-filtered | "
-        f"{speculative_count} speculative-filtered | "
-        f"{id_dup_count} id-dups | "
-        f"{title_dup_count} title-dups | "
-        f"{no_summary_count} no-summary | "
-        f"{norm_fail_count} norm-failed"
+    # === Call 1 — Analyst insights (per-user articles + per-user prices) ===
+    logger.info(f"[{user_id}] Generating analyst insights via Gemini flash-lite...")
+    try:
+        insights_response = get_insights_from_news_and_prices(article_blocks, stock_summary_json)
+        logger.info(f"[{user_id}] Insights generated ({len(insights_response)} chars).")
+        save_log(f"insights_{user_id}", _DIR_INSIGHTS, {"response": insights_response})
+    except Exception as e:
+        logger.error(f"[{user_id}] Failed to get insights: {e}")
+        insights_response = "{}"
+
+    # === Build computed sections ===
+    portfolio_summary = _build_portfolio_summary(user_stock_data, user_portfolio)
+    movers_section = _build_movers_section(user_stock_data, insights_response)
+
+    # === Call 2 — Editorial digest ===
+    portfolio_ticker_list = ", ".join(e["ticker"] for e in user_portfolio["equities"])
+    logger.info(
+        f"[{user_id}] Editorial inputs — insights: {len(insights_response)} chars, "
+        f"articles: {len(article_titles_urls)} chars, movers: {len(movers_section)} chars."
     )
+    logger.info(f"[{user_id}] Generating editorial digest via Gemini flash...")
+    editorial_text = ""
+    try:
+        editorial_text = generate_editorial_digest(
+            insights_json=insights_response,
+            portfolio_snapshot=portfolio_summary,
+            movers_table=movers_section,
+            article_titles_urls=article_titles_urls,
+            earnings_context=earnings_context,
+            portfolio_tickers=portfolio_ticker_list,
+        )
+        logger.info(f"[{user_id}] Editorial digest generated ({len(editorial_text)} chars).")
+        editorial_text = _cap_key_insights(editorial_text, limit=15)
+        prefix_parts = [p for p in [portfolio_summary, movers_section] if p]
+        full_digest = "\n\n---\n\n".join(prefix_parts + [editorial_text])
+
+        # Save markdown
+        user_md_dir = _DIR_DIGESTS / user_id
+        user_md_dir.mkdir(parents=True, exist_ok=True)
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        md_path = user_md_dir / f"digest_{user_id}_{date_str}_{_log_ts()}.md"
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(f"# Daily Digest — {date_str} — {user.get('name', user_id)}\n\n")
+            f.write(full_digest)
+        logger.info(f"[{user_id}] Markdown saved: {md_path}")
+
+    except Exception as e:
+        logger.error(f"[{user_id}] Failed to generate editorial digest: {e}")
+
+    # === Render HTML email ===
+    if editorial_text:
+        user_html_dir = _DIR_HTML / user_id
+        user_html_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"[{user_id}] Rendering HTML email...")
+        try:
+            parsed = parse_digest_markdown(portfolio_summary, movers_section, editorial_text)
+            date_display = datetime.now(_EST).strftime("%B %d, %Y")
+            html_output = render_digest_html(
+                portfolio_snapshot=parsed["portfolio_snapshot"],
+                movers=parsed["movers"],
+                key_insights=parsed["key_insights"],
+                earnings_text=parsed["earnings_text"],
+                news_stories=parsed["news_stories"],
+                date_str=date_display,
+                article_count=len(relevant_articles),
+                holdings_count=len(user_portfolio["equities"]),
+            )
+            html_path = user_html_dir / f"digest_{user_id}_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}_{_log_ts()}.html"
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(html_output)
+            logger.info(f"[{user_id}] HTML saved: {html_path}")
+        except Exception as e:
+            logger.error(f"[{user_id}] Failed to render HTML: {e}")
+
+    logger.info(f"[{user_id}] ── Digest complete ──")
 ```
 
-**Also wire it into the query-time noise check** in `model/relevance_filter.py`. Find the noise check block (around lines 169-174):
+**Step 2d:** Remove `save_eod_digest()` if it still exists — replaced by per-user save logic.
+
+**Step 2e:** Make sure the `__main__` block has argparse (it already does — verify it's unchanged):
 
 ```python
-        if is_noise_article(title):
-            log.debug(f"[NOISE] {title[:70]}")
-            noise_skipped += 1
-            continue
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Run the Portfolio Pulse digest pipeline.")
+    parser.add_argument("--force", action="store_true", help="Run even on weekends/holidays (market closed).")
+    args = parser.parse_args()
+    run_pipeline(force=args.force)
 ```
-
-Add an import at the top of `relevance_filter.py` — update the existing import:
-```python
-from news.noise_filter import is_noise_article, is_speculative_article
-```
-
-Add a speculative check right after the noise check:
-```python
-        if is_speculative_article(title):
-            log.debug(f"[SPECULATIVE] {title[:70]}")
-            noise_skipped += 1
-            continue
-```
-
-This uses the same `noise_skipped` counter — no need for a separate counter at query time.
-
----
-
-## Fix 3: Expand Institutional Disclosure Entity Indicators (low-medium impact)
-
-**File:** `news/noise_filter.py`
-
-**Problem:** Fund-anchored noise patterns on lines 86, 94, and 102 use entity indicators `LLC|Ltd\.?|L\.P\.|LP|management|capital|advisors?|wealth|asset|partners?|associates?`. International fund names use suffixes not in this list: "SPX Gestao de Recursos **Ltda**", "Gordian Capital Singapore **Pte** Ltd", "Headwater Capital **Co** Ltd". These pass the noise filter and generate useless insights like "Kepler Cheuvreux bought 83,324 shares of JNJ."
-
-**Fix:** Expand the entity indicator list in all three fund-anchored patterns (lines 86, 94, 102). Replace the entity keyword group in each of these three patterns:
-
-**Current** (appears identically in all 3 patterns):
-```
-\b(?:LLC|Ltd\.?|L\.P\.|LP|management|capital|advisors?|wealth|asset|partners?|associates?)\b
-```
-
-**New** (add to all 3 patterns):
-```
-\b(?:LLC|Ltd\.?|Ltda\.?|L\.P\.|LP|Co\.?|Corp\.?|Inc\.?|Pte\.?|GmbH|SA|AG|NV|BV|Pty\.?|management|capital|advisors?|wealth|asset|partners?|associates?|group|fund|trust|holdings?)\b
-```
-
-The additions are: `Ltda\.?` (Portuguese/Spanish), `Co\.?` (common prefix), `Corp\.?`, `Inc\.?`, `Pte\.?` (Singapore), `GmbH` (German), `SA` (French/Spanish), `AG` (German/Swiss), `NV` (Dutch), `BV` (Dutch), `Pty\.?` (Australian), `group`, `fund`, `trust`, `holdings?`.
-
-**Also add one new pattern** to the `_PATTERNS` list for the "Buys Shares of [number]" format where the specific share count in the title is the distinguishing signal. Real corporate news never says "Buys Shares of 10,810 Alphabet":
-
-```python
-    # "Gordian Capital Buys Shares of 10,810 Alphabet" / "Firm Purchases 2,800 Shares of JPMorgan"
-    # The specific share count after "of" distinguishes fund disclosures from corporate M&A.
-    # "Apple Buys Stake in AI Startup" does NOT match (no digit after "of").
-    re.compile(
-        r"\b(?:buys?|purchases?|acquires?)\s+(?:shares?|stake)\s+of\s+[\d,]+\s",
-        re.IGNORECASE,
-    ),
-```
-
-Add this pattern at the end of the `_PATTERNS` list, before the closing `]`.
 
 ---
 
 ## What NOT to Change
 
-- **Do NOT modify `pipeline/html_renderer.py`**
-- **Do NOT modify `model/model.py`** — no LLM prompt changes in this session
-- **Do NOT modify `pipeline/run_test_pipeline.py`** — no pipeline flow changes
+- **Do NOT modify `model/model.py`**
+- **Do NOT modify `pipeline/html_renderer.py`** — disclaimer already added
+- **Do NOT modify `news/noise_filter.py`**
+- **Do NOT modify `news/news_ingest_pipeline.py`**
+- **Do NOT modify `core/users.py`**
+- **Do NOT modify `pipeline/shared_data.py`**
 - **Do NOT modify `storage/vector_store.py`**
 - **Do NOT modify `model/embedder.py`**
-- **Do NOT modify the existing patterns** in `_PATTERNS` list beyond expanding the entity indicators in the three fund-anchored patterns (lines 86, 94, 102). Do not remove, reorder, or restructure any existing pattern.
-- **Do NOT modify `_ROUNDUP_PATTERNS`** — those are working correctly.
-- **Do NOT add a "Should You Buy" pattern** — articles like "Apple Just Unveiled the iPhone 17e. Should You Buy, Sell, or Hold AAPL Stock Now?" are legitimate news articles with a clickbait suffix.
+- **Do NOT change master portfolio indexing** — all users' tickers stay in one ChromaDB collection. Per-user filtering is at query time via `allowed_terms`.
+- **Do NOT remove** any helper functions (`_extract_relevant_tickers`, `_build_portfolio_summary`, `_cap_key_insights`, `_truncate_at_sentence`, `_parse_insights_safe`, `_build_movers_section`, `_build_article_titles_urls`, `format_article_blocks`, `_enrich_articles_with_full_text`, `_fetch_article_body`, `_format_earnings_context`, `save_log`) — all still used.
 
 ---
 
 ## Validation
 
-**Step 1:** Clear ChromaDB and re-ingest:
+Run (use `--force` on weekends):
 ```bash
-rm -rf chroma_store/
-python news/news_ingest_pipeline.py
+python pipeline/run_test_pipeline.py --force
 ```
 
-Check the ingestion log for:
-- `speculative-filtered` count in the final summary — should be 3-8 articles per run
-- Verify known speculative titles are caught: "Can Nvidia Stock Reach $10 Trillion..." should appear as "Filtering speculative:"
-- Verify legitimate titles are NOT caught: "Apple Just Unveiled the iPhone 17e..." should NOT appear in any filter log
+Verify in the pipeline log:
 
-**Step 2:** Run the pipeline:
-```bash
-python pipeline/run_test_pipeline.py
-```
-
-Check `logs/pipeline_runs/` for the latest run log. Verify:
-1. **Broad-match penalties appear in logs:** Lines like `[FAIL] similarity=0.764 (broad:-0.04) match='S&P 500'` should show articles that previously passed now failing due to the penalty.
-2. **Fewer than 40 articles pass relevance** on typical days — the combination of time filter (from previous session) + broad penalty + speculative filter should reduce the passing count to 25-35, all higher quality.
-3. **No speculative articles in the article list:** Titles containing "Can X Reach", "Where Will X Be", "If You Invested" should appear as `[SPECULATIVE]` skips, not `[PASS]`.
-4. **No fund disclosure articles:** "SPX Gestao de Recursos Ltda" and "Gordian Capital Singapore Pte Ltd" titles should appear as `[NOISE]` skips.
-5. **Key Insights quality improved:** No more "QQQ holds approximately 100 stocks" type insights. Each bullet should contain specific, actionable, recent facts.
-
-**Step 3:** Open the HTML email in `logs/digests/html/` and read it as if you were the user. Every Key Insight should be a fact you'd want to know about your holdings. Every News story should be genuinely newsworthy. If you see generic commentary or speculative projections, check which article produced it and whether it should have been filtered.
+1. **Shared steps run ONCE** — stock data for 27 tickers fetched once before per-user section
+2. **Different article counts per user** — rajat ~30-40, tester1 ~20-30. If both show exactly 40, the filter isn't working.
+3. **Separate Call 1 per user** — `insights_rajat_*.json` and `insights_tester1_*.json` in `logs/insights/`
+4. **No cross-user ticker contamination** — rajat's insights have no PLTR/COIN, tester1's have no DKNG/RKLB/CELH
+5. **Both users complete** — "Pipeline complete. 2/2 digests generated."
+6. **Per-user output dirs** — `logs/digests/rajat/`, `logs/digests/tester1/`, `logs/digests/html/rajat/`, `logs/digests/html/tester1/`
 
 ---
 
-## Summary of Changes
+## Summary
 
 | File | Action | Details |
 |------|--------|---------|
-| `model/relevance_filter.py` | Add broad-match penalty | Define `_BROAD_MATCH_TERMS` set and `BROAD_MATCH_PENALTY` constant. Apply penalty to `best_similarity` before threshold check. Log the penalty. Import `is_speculative_article` and add query-time speculative filter. |
-| `news/noise_filter.py` | Add speculative patterns | New `_SPECULATIVE_PATTERNS` list + `is_speculative_article()` function. Expand entity indicators in 3 fund-anchored patterns. Add "Buys Shares of [number]" pattern. |
-| `news/news_ingest_pipeline.py` | Wire speculative filter | Import `is_speculative_article`, add filter check after roundup check, add counter, update summary log. |
+| `model/relevance_filter.py` | Add `allowed_terms` + helper | `build_user_allowed_terms()`, `allowed_terms` param on `find_relevant_articles_from_context()`, `top_k` 3→5 |
+| `pipeline/run_test_pipeline.py` | Restructure | Shared section shrinks to Steps 1-3. `_generate_user_digest()` handles article filtering, scraping, Call 1, Call 2, HTML. Per-user loop. |

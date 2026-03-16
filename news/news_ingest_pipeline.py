@@ -2,13 +2,39 @@
 import sys
 import json
 import time
+import logging
 from pathlib import Path
+from datetime import datetime
+
+import pytz
 
 # Ensure project root is on sys.path when this file is run directly
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.config import settings
 from core.logging import get_logger
+
+_EST = pytz.timezone("US/Eastern")
+ROOT = Path(__file__).resolve().parent.parent
+_DIR_INGEST_RUNS = ROOT / "logs" / "pipeline_runs" / "news_ingest_pipeline"
+_DIR_INGEST_RUNS.mkdir(parents=True, exist_ok=True)
+
+
+def _log_ts() -> str:
+    return datetime.now(_EST).strftime("%Y-%m-%dT%H-%M-%S-EST")
+
+
+def _attach_run_log() -> Path:
+    """Attach an INFO-level file handler so all ingest output is saved to a timestamped log."""
+    log_path = _DIR_INGEST_RUNS / f"ingest_run_{_log_ts()}.log"
+    handler = logging.FileHandler(log_path, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s | %(message)s"))
+    handler.setLevel(logging.INFO)
+    logging.getLogger().addHandler(handler)
+    for noisy in ("httpcore", "httpx", "chromadb", "google", "urllib3", "hpack"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+    return log_path
+from core.users import load_all_users, build_master_portfolio
 from news.normalize import normalize_article
 from news.newsdata import fetch_finance_news_from_newsdataio
 from news.noise_filter import is_noise_article as _is_noise_article, is_generic_roundup as _is_generic_roundup, is_speculative_article as _is_speculative_article, is_price_alert_article as _is_price_alert_article
@@ -17,8 +43,6 @@ from storage.vector_store import upsert_to_collection, get_article_collection
 
 log = get_logger("news_ingest_pipeline")
 embedder = GeminiEmbedder()
-
-ROOT = Path(__file__).resolve().parent.parent
 
 # ---------------------------------------------------------------------------
 # Query strategy configuration
@@ -47,10 +71,14 @@ _MACRO_QUERY: str = "S&P 500,Nasdaq,stock market,earnings,investing"
 
 
 # ---------------------------------------------------------------------------
-def _load_portfolio() -> dict:
-    """Load full portfolio data from portfolio.json."""
-    with open(ROOT / "user_portfolio" / "portfolio.json", "r") as f:
-        return json.load(f)
+def _load_master_portfolio() -> dict:
+    """Load all user portfolios and build the master (union) portfolio for shared ingestion."""
+    users = load_all_users()
+    if not users:
+        log.warning("No users found. Falling back to legacy portfolio.json.")
+        with open(ROOT / "user_portfolio" / "portfolio.json", "r") as f:
+            return json.load(f)
+    return build_master_portfolio(users)
 
 
 def _build_query_groups(equities: list[dict]) -> list[tuple[str, str]]:
@@ -123,7 +151,11 @@ def _fetch_all_articles(queries: list[tuple[str, str]]) -> list[dict]:
 # --- Main ingestion pipeline ---
 def ingest_daily_news() -> int:
     """Fetch, embed, and store today's finance articles. Returns count of stored articles."""
-    portfolio = _load_portfolio()
+    portfolio = _load_master_portfolio()
+    equities = portfolio.get("equities", [])
+    portfolio_tickers = [e["ticker"].upper() for e in equities]
+    portfolio_sectors = [s.lower() for s in portfolio.get("sectors", [])]
+    log.info(f"Master portfolio: {len(equities)} unique tickers, {len(portfolio_sectors)} sectors")
 
     # --- Cleanup: remove articles older than 7 days ---
     try:
@@ -139,10 +171,6 @@ def ingest_daily_news() -> int:
             log.info("Cleanup: no stale articles to remove.")
     except Exception as e:
         log.warning(f"Cleanup failed (non-fatal): {e}")
-
-    equities = portfolio.get("equities", [])
-    portfolio_tickers = [e["ticker"].upper() for e in equities]
-    portfolio_sectors = [s.lower() for s in portfolio.get("sectors", [])]
 
     queries = _build_query_groups(equities)
     log.info(f"Built {len(queries)} queries (~{len(queries)} API credits this run):")
@@ -287,5 +315,7 @@ def ingest_daily_news() -> int:
 
 
 if __name__ == "__main__":
+    log_path = _attach_run_log()
+    log.info(f"Ingest log: {log_path}")
     ingest_daily_news()
     log.info("News ingestion for today completed.")

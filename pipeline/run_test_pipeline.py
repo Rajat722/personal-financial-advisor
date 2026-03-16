@@ -13,11 +13,13 @@ from datetime import datetime, timezone
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.logging import get_logger
-from model.relevance_filter import find_relevant_articles_from_context, index_portfolio_terms
-from utils.stock_details import get_stock_OHLCV_data, format_summary_json, format_time_series_table, get_upcoming_earnings
+from core.users import load_all_users, build_master_portfolio, get_all_tickers
+from model.relevance_filter import find_relevant_articles_from_context, index_portfolio_terms, build_user_allowed_terms
+from utils.stock_details import format_summary_json, format_time_series_table
 from model.model import get_insights_from_news_and_prices, generate_editorial_digest
 from storage.vector_store import get_portfolio_collection
 from pipeline.html_renderer import parse_digest_markdown, render_digest_html
+from pipeline.shared_data import fetch_shared_stock_data, fetch_shared_earnings
 
 logger = get_logger("pipeline")
 
@@ -26,7 +28,7 @@ LOG_DIR = ROOT / "logs"
 _EST = pytz.timezone("US/Eastern")
 
 # Log subdirectories
-_DIR_RUNS      = LOG_DIR / "pipeline_runs"
+_DIR_RUNS      = LOG_DIR / "pipeline_runs" / "run_test_pipeline"
 _DIR_INSIGHTS  = LOG_DIR / "insights"
 _DIR_SUMMARIES = LOG_DIR / "summaries"
 _DIR_DIGESTS   = LOG_DIR / "digests"
@@ -67,15 +69,6 @@ def save_log(filename: str, subdir: Path, content: dict) -> None:
         json.dump(content, f, indent=2, ensure_ascii=False)
     logger.info(f"Log saved: {path}")
 
-
-def save_eod_digest(digest_text: str) -> None:
-    """Write the EOD digest as a human-readable markdown file."""
-    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    path = _DIR_DIGESTS / f"digest_{date_str}_{_log_ts()}.md"
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(f"# Daily Digest — {date_str}\n\n")
-        f.write(digest_text)
-    logger.info(f"EOD digest saved: {path}")
 
 
 def _format_earnings_context(earnings: list[dict]) -> str:
@@ -181,45 +174,6 @@ def _enrich_articles_with_full_text(articles: list) -> int:
     return enriched
 
 
-def _extract_relevant_tickers(articles: list, portfolio: dict) -> list[str]:
-    """Scan article titles and text to identify which portfolio tickers are covered.
-
-    Uses regex word-boundary matching for ticker symbols (e.g. NVDA, AAPL) and
-    first-word matching for company names (e.g. 'Nvidia', 'Apple', 'Microsoft').
-    This is independent of article metadata, so it works correctly for both:
-    - Old articles (which may have all 25 tickers as fallback in metadata)
-    - New articles (which will have only matched tickers or empty)
-    Falls back to full portfolio only if zero tickers are found.
-    """
-    all_tickers = [item["ticker"] for item in portfolio["equities"]]
-    ticker_set = set(all_tickers)
-
-    # Map first distinctive word of each company name → ticker.
-    # Skip short words (<=4 chars) that produce false matches (e.g. "Meta" is fine, "AT" is not).
-    company_to_ticker: dict[str, str] = {}
-    for item in portfolio["equities"]:
-        for word in item["company"].split():
-            if len(word) > 4:
-                company_to_ticker[word.lower()] = item["ticker"]
-                break  # one key per company
-
-    relevant_tickers: set[str] = set()
-    for article in articles:
-        title = article['metadata'].get('title', '')
-        text_sample = article.get('text', '')[:500]
-        combined_lower = (title + " " + text_sample).lower()
-        combined_upper = (title + " " + text_sample).upper()
-
-        for ticker in ticker_set:
-            if re.search(r'\b' + re.escape(ticker) + r'\b', combined_upper):
-                relevant_tickers.add(ticker)
-
-        for company_word, ticker in company_to_ticker.items():
-            if company_word in combined_lower:
-                relevant_tickers.add(ticker)
-
-    matched = sorted(relevant_tickers & ticker_set)
-    return matched if matched else all_tickers
 
 
 def _build_portfolio_summary(stock_data: dict, portfolio: dict) -> str:
@@ -385,89 +339,79 @@ def _build_article_titles_urls(articles: list) -> str:
     return "\n".join(lines)
 
 
-def run_pipeline() -> None:
-    log_path = _attach_run_log()
-    logger.info(f"Run log: {log_path}")
+def _generate_user_digest(
+    user: dict,
+    shared_stock_data: dict,
+    shared_earnings: list[dict],
+) -> None:
+    """Generate a complete personalized digest for one user.
 
-    # === Step 1: Index portfolio terms (skip if already indexed) ===
-    portfolio_collection = get_portfolio_collection()
-    if portfolio_collection.count() > 0:
-        logger.info(f"Portfolio already indexed ({portfolio_collection.count()} terms). Skipping re-index.")
-    else:
-        logger.info("Indexing portfolio terms...")
-        index_portfolio_terms()
-        logger.info(f"Portfolio indexed: {portfolio_collection.count()} terms.")
+    Per-user: article filtering, scraping, Call 1, Call 2, HTML render.
+    Shared data (stock prices, earnings) passed in to avoid redundant fetches.
+    """
+    user_id = user["user_id"]
+    user_portfolio = {
+        "equities": user["equities"],
+        "sectors": user.get("sectors", []),
+        "indices": user.get("indices", []),
+        "total_investment": user.get("total_investment", 0),
+    }
+    logger.info(f"[{user_id}] ── Starting digest ({len(user_portfolio['equities'])} holdings) ──")
 
-    # === Step 2: Find relevant articles ===
-    logger.info("Scanning articles for portfolio relevance...")
-    relevant_articles = find_relevant_articles_from_context()
-    logger.info(f"{len(relevant_articles)} relevant articles will be used for the digest.")
+    # === Find relevant articles for THIS user ===
+    allowed_terms = build_user_allowed_terms(user_portfolio)
+    logger.info(f"[{user_id}] Filtering articles ({len(allowed_terms)} allowed terms)...")
+    relevant_articles = find_relevant_articles_from_context(allowed_terms=allowed_terms)
+    logger.info(f"[{user_id}] {len(relevant_articles)} relevant articles found.")
 
     if not relevant_articles:
-        logger.error("No relevant articles found. Run news_ingest_pipeline.py first, or lower SIM_THRESHOLD.")
+        logger.warning(f"[{user_id}] No relevant articles. Skipping.")
         return
 
-    # === Step 3: Enrich passing articles with full text (best-effort scraping) ===
-    # NewsData.io only provides 1-3 sentence descriptions. Full text dramatically
-    # improves LLM output — actual analyst quotes, numbers, and event causality.
-    # Paywalled articles (WSJ, Bloomberg, etc.) return None and are skipped gracefully.
-    logger.info(f"Fetching full article text for {len(relevant_articles)} relevant articles...")
+    # === Scrape full article text ===
+    logger.info(f"[{user_id}] Scraping full text for {len(relevant_articles)} articles...")
     enriched_count = _enrich_articles_with_full_text(relevant_articles)
-    logger.info(f"Full text fetched for {enriched_count}/{len(relevant_articles)} articles.")
+    logger.info(f"[{user_id}] Scraped {enriched_count}/{len(relevant_articles)} articles.")
 
-    # === Step 4: Format articles into prompt blocks ===
+    # === Format article blocks ===
     article_blocks = format_article_blocks(relevant_articles)
+    article_titles_urls = _build_article_titles_urls(relevant_articles)
 
-    # === Step 5: Identify which portfolio tickers appear in relevant articles ===
-    with open(ROOT / "user_portfolio" / "portfolio.json", "r") as f:
-        portfolio = json.load(f)
+    # === Filter shared data to this user's tickers ===
+    user_tickers = {e["ticker"] for e in user_portfolio["equities"]}
+    user_stock_data = {t: df for t, df in shared_stock_data.items() if t in user_tickers}
+    stock_summary_json = json.dumps(format_time_series_table(user_stock_data), indent=2)
 
-    tickers_to_fetch = _extract_relevant_tickers(relevant_articles, portfolio)
-    logger.info(f"Fetching OHLCV data for {len(tickers_to_fetch)} relevant tickers: {tickers_to_fetch}")
-
-    # === Step 5.5: Fetch earnings calendar for all portfolio companies ===
-    # Covers past 3 days (recently reported) + next 14 days (upcoming).
-    # Injected into the EOD digest prompt as a structured "Upcoming Earnings" section.
-    logger.info("Fetching earnings calendar for portfolio companies...")
-    earnings = get_upcoming_earnings(portfolio["equities"])
-    earnings_context = _format_earnings_context(earnings)
-    if earnings:
-        logger.info(f"Earnings calendar — {len(earnings)} event(s):\n{earnings_context}")
+    user_earnings = [e for e in shared_earnings if e["ticker"] in user_tickers]
+    earnings_context = _format_earnings_context(user_earnings)
+    if user_earnings:
+        logger.info(f"[{user_id}] Earnings: {len(user_earnings)} event(s)")
     else:
-        logger.info("No portfolio earnings events in the 3-day lookback + 14-day lookahead window.")
+        logger.info(f"[{user_id}] No earnings events in window.")
 
-    # === Step 6: Fetch intraday stock data (full 30-min time series for relevant tickers only) ===
-    stock_data = get_stock_OHLCV_data(tickers_to_fetch, interval="30m", period="5d")
-    logger.info(f"Stock data fetched for {len(stock_data)}/{len(tickers_to_fetch)} tickers.")
-    stock_summary_json = json.dumps(format_time_series_table(stock_data), indent=2)
-
-    # === Step 7: Generate insights (news + price correlation) ===
-    logger.info("Generating news-price insights via Gemini...")
+    # === Call 1 — Analyst insights (per-user articles + per-user prices) ===
+    logger.info(f"[{user_id}] Generating analyst insights via Gemini flash-lite...")
     try:
         insights_response = get_insights_from_news_and_prices(article_blocks, stock_summary_json)
-        logger.info(f"Insights generated ({len(insights_response)} chars).")
-        save_log("insights_response", _DIR_INSIGHTS, {"response": insights_response})
+        logger.info(f"[{user_id}] Insights generated ({len(insights_response)} chars).")
+        save_log(f"insights_{user_id}", _DIR_INSIGHTS, {"response": insights_response})
     except Exception as e:
-        logger.error(f"Failed to get insights: {e}")
+        logger.error(f"[{user_id}] Failed to get insights: {e}")
         insights_response = "{}"
 
-    # === Step 8.5: Build computed sections (no LLM needed) ===
-    portfolio_summary = _build_portfolio_summary(stock_data, portfolio)
-    movers_section = _build_movers_section(stock_data, insights_response)
+    # === Build computed sections ===
+    portfolio_summary = _build_portfolio_summary(user_stock_data, user_portfolio)
+    movers_section = _build_movers_section(user_stock_data, insights_response)
 
-    # === Step 9: Generate editorial digest (Call 2: gemini-2.5-flash) ===
-    article_titles_urls = _build_article_titles_urls(relevant_articles)
+    # === Call 2 — Editorial digest ===
+    portfolio_ticker_list = ", ".join(e["ticker"] for e in user_portfolio["equities"])
     logger.info(
-        f"Editorial prompt inputs — insights: {len(insights_response)} chars, "
-        f"article_titles: {len(article_titles_urls)} chars, "
-        f"movers: {len(movers_section)} chars, "
-        f"portfolio_snapshot: {len(portfolio_summary)} chars."
+        f"[{user_id}] Editorial inputs — insights: {len(insights_response)} chars, "
+        f"articles: {len(article_titles_urls)} chars, movers: {len(movers_section)} chars."
     )
-    logger.info("Generating editorial digest via Gemini flash...")
+    logger.info(f"[{user_id}] Generating editorial digest via Gemini flash...")
+    editorial_text = ""
     try:
-        # Build portfolio ticker allowlist for editorial prompt
-        portfolio_ticker_list = ", ".join(e["ticker"] for e in portfolio["equities"])
-
         editorial_text = generate_editorial_digest(
             insights_json=insights_response,
             portfolio_snapshot=portfolio_summary,
@@ -476,19 +420,29 @@ def run_pipeline() -> None:
             earnings_context=earnings_context,
             portfolio_tickers=portfolio_ticker_list,
         )
-        logger.info(f"Editorial digest generated ({len(editorial_text)} chars).")
+        logger.info(f"[{user_id}] Editorial digest generated ({len(editorial_text)} chars).")
         editorial_text = _cap_key_insights(editorial_text, limit=15)
         prefix_parts = [p for p in [portfolio_summary, movers_section] if p]
         full_digest = "\n\n---\n\n".join(prefix_parts + [editorial_text])
-        save_eod_digest(full_digest)
-        logger.info("\n--- EOD DIGEST ---\n" + full_digest + "\n--- END DIGEST ---")
-    except Exception as e:
-        logger.error(f"Failed to generate editorial digest: {e}")
-        editorial_text = ""
 
-    # === Step 10: Render HTML email ===
+        # Save markdown
+        user_md_dir = _DIR_DIGESTS / user_id
+        user_md_dir.mkdir(parents=True, exist_ok=True)
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        md_path = user_md_dir / f"digest_{user_id}_{date_str}_{_log_ts()}.md"
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(f"# Daily Digest — {date_str} — {user.get('name', user_id)}\n\n")
+            f.write(full_digest)
+        logger.info(f"[{user_id}] Markdown saved: {md_path}")
+
+    except Exception as e:
+        logger.error(f"[{user_id}] Failed to generate editorial digest: {e}")
+
+    # === Render HTML email ===
     if editorial_text:
-        logger.info("Rendering HTML email template...")
+        user_html_dir = _DIR_HTML / user_id
+        user_html_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"[{user_id}] Rendering HTML email...")
         try:
             parsed = parse_digest_markdown(portfolio_summary, movers_section, editorial_text)
             date_display = datetime.now(_EST).strftime("%B %d, %Y")
@@ -500,17 +454,92 @@ def run_pipeline() -> None:
                 news_stories=parsed["news_stories"],
                 date_str=date_display,
                 article_count=len(relevant_articles),
-                holdings_count=len(portfolio["equities"]),
+                holdings_count=len(user_portfolio["equities"]),
             )
-            html_path = _DIR_HTML / f"digest_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}_{_log_ts()}.html"
+            html_path = user_html_dir / f"digest_{user_id}_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}_{_log_ts()}.html"
             with open(html_path, "w", encoding="utf-8") as f:
                 f.write(html_output)
-            logger.info(f"HTML email saved: {html_path}")
+            logger.info(f"[{user_id}] HTML saved: {html_path}")
         except Exception as e:
-            logger.error(f"Failed to render HTML email: {e}")
+            logger.error(f"[{user_id}] Failed to render HTML: {e}")
 
-    logger.info("Pipeline complete.")
+    logger.info(f"[{user_id}] ── Digest complete ──")
+
+
+def run_pipeline(force: bool = False) -> None:
+    log_path = _attach_run_log()
+    logger.info(f"Run log: {log_path}")
+
+    # Weekend / market-closed detection
+    now_et = datetime.now(_EST)
+    day_of_week = now_et.weekday()
+    if day_of_week >= 5:
+        if not force:
+            logger.warning(
+                f"Today is {now_et.strftime('%A')} — markets are closed. "
+                f"Skipping pipeline. Use --force to run anyway."
+            )
+            return
+        else:
+            logger.warning(
+                f"Today is {now_et.strftime('%A')} — running anyway due to --force flag."
+            )
+
+    # ================================================================
+    # SHARED STEPS (run once)
+    # ================================================================
+
+    users = load_all_users()
+    if not users:
+        logger.error("No users found in user_portfolios/. Create user_*.json files first.")
+        return
+    master_portfolio = build_master_portfolio(users)
+    all_tickers = get_all_tickers(users)
+    logger.info(f"Loaded {len(users)} user(s), {len(all_tickers)} unique tickers.")
+
+    # Index master portfolio terms
+    portfolio_collection = get_portfolio_collection()
+    existing_count = portfolio_collection.count()
+    expected_terms = len(master_portfolio["equities"]) * 2 + len(master_portfolio["sectors"]) + len(master_portfolio["indices"])
+    if existing_count >= expected_terms:
+        logger.info(f"Portfolio already indexed ({existing_count} terms). Skipping re-index.")
+    else:
+        logger.info(f"Indexing master portfolio terms ({existing_count} → ~{expected_terms} expected)...")
+        index_portfolio_terms(portfolio_data=master_portfolio)
+        logger.info(f"Portfolio indexed: {portfolio_collection.count()} terms.")
+
+    # Fetch shared stock data + earnings
+    shared_stock_data = fetch_shared_stock_data(all_tickers)
+    shared_earnings = fetch_shared_earnings(master_portfolio["equities"])
+
+    # ================================================================
+    # PER-USER DIGEST GENERATION
+    # ================================================================
+    logger.info("=" * 60)
+    logger.info(f"GENERATING DIGESTS FOR {len(users)} USER(S)")
+    logger.info("=" * 60)
+
+    successful = 0
+    failed = 0
+    for user in users:
+        try:
+            _generate_user_digest(
+                user=user,
+                shared_stock_data=shared_stock_data,
+                shared_earnings=shared_earnings,
+            )
+            successful += 1
+        except Exception as e:
+            logger.error(f"[{user['user_id']}] Unhandled error: {e}")
+            failed += 1
+
+    logger.info(f"Pipeline complete. {successful}/{len(users)} digests generated"
+                f"{f', {failed} failed' if failed else ''}.")
 
 
 if __name__ == "__main__":
-    run_pipeline()
+    import argparse
+    parser = argparse.ArgumentParser(description="Run the Portfolio Pulse digest pipeline.")
+    parser.add_argument("--force", action="store_true", help="Run even on weekends/holidays (market closed).")
+    args = parser.parse_args()
+    run_pipeline(force=args.force)
