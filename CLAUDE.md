@@ -4,18 +4,25 @@ Read this fully before making any changes.
 
 ---
 
-## Current Priority
+## Project Status
 
-**Per-user article filtering + Call 1 to restore digest quality.**
+The core pipeline is **fully functional**: shared ingestion → per-user article filtering → per-user Call 1 + Call 2 → HTML digest. Two test users (rajat: 25 holdings, tester1: 10 holdings) generating correct, personalized digests with no cross-user contamination.
 
-The multi-user infrastructure is working (shared ingestion, stock data, earnings, per-user Call 2 + HTML). But digest quality degraded because article filtering and Call 1 run against the master portfolio (union of all users) instead of per-user. Articles for non-user tickers dilute the 40-article window and cause LLM cross-contamination.
+**What's working:**
+- [x] Multi-user infrastructure (shared ingestion, per-user everything else)
+- [x] Per-user article filtering via `allowed_terms` in `find_relevant_articles_from_context()`
+- [x] Ticker-grouped article blocks to prevent LLM cross-contamination
+- [x] Doc ID deduplication (prevents same article in multiple ticker groups)
+- [x] 4-layer noise filter (institutional, roundup, speculative, price-alert) — 10 pattern fixes/additions as of March 16
+- [x] HTML renderer with bold-tolerance regex fix
+- [x] Per-user output directories (`logs/digests/{user_id}/`, `logs/digests/html/{user_id}/`)
 
-**Current task:**
-- [ ] Move article filtering, scraping, and Call 1 from shared section to per-user loop
-- [ ] Add `allowed_terms` parameter to `find_relevant_articles_from_context()` for per-user filtering
-- [ ] Each user gets their own 40 articles + their own Call 1
-
-**Validation:** `python pipeline/run_test_pipeline.py --force` → verify different article counts per user, separate insight logs, no cross-user ticker contamination.
+**Priorities (in order):**
+1. **Scheduled ingestion** — 3x/day (7:00 AM, 12:30 PM, 5:30 PM ET) to build article volume. Digest quality bottleneck is article count, not pipeline logic.
+2. **Weekday validation** — Run full pipeline on active market day, compare against March 13 benchmark (18/20 drivers, 15 Key Insights).
+3. **MailerSend email delivery** — Wire up HTML email sending.
+4. **RKLB-type hallucination guard** — Title keyword guard in `relevance_filter.py` to prevent semantic-similarity false matches (e.g., Nebius article matching "Nvidia" at 0.763 and getting attributed to RKLB).
+5. **FastAPI layer** — POST /users/signup, GET /users/{id}/newsletter, POST /newsletter/send.
 
 ---
 
@@ -74,7 +81,7 @@ News Ingestion (separate step, runs 1-3x daily):
 |------|---------|
 | `pipeline/run_test_pipeline.py` | Main orchestration — shared steps + per-user loop |
 | `model/model.py` | LLM prompts — Call 1 (analyst) + Call 2 (editorial) |
-| `model/relevance_filter.py` | Article filtering — 36h window, similarity, broad-match penalty, dedup |
+| `model/relevance_filter.py` | Article filtering — 20h window, similarity threshold 0.75, broad-match penalty, dedup, per-user `allowed_terms` |
 | `pipeline/html_renderer.py` | Markdown → HTML email with styled template |
 | `news/noise_filter.py` | Regex patterns: institutional, speculative, price-alert, roundup |
 | `news/news_ingest_pipeline.py` | Fetch + filter + embed + store articles |
@@ -107,18 +114,18 @@ rm -rf chroma_store/
 - **LLM Prompts:** STRICT RULES anti-hallucination block in every prompt
 - **Error handling:** try/except on all API calls, `@gemini_retry()`, `_parse_insights_safe()` with regex fallback
 - **Python enforcement:** Hard caps on Key Insights (15) and News (8) via `_cap_key_insights()`
-- **Data freshness:** 36h time window, 7-day cleanup, publication dates in article blocks
+- **Data freshness:** 20h time window, 7-day cleanup, publication dates in article blocks
+- **Article cap:** 30 articles max per user (sorted by similarity score descending)
 - **Article text:** Capped at 1500 chars per article (`body[:1500]`)
 
 ---
 
 ## Session Rules
 
-1. **Current task first** — complete per-user Call 1 refactor before new features
-2. **One fix at a time** — change, test, verify, then move on
-3. **Provide test commands** — after every change, show how to verify
-4. **Do NOT modify `noise_filter.py`** unless patterns are explicitly specified
-5. **Do NOT modify `html_renderer.py`** unless explicitly asked
-6. **Do NOT modify `model/model.py`** — prompts are stable
-7. **Never mix embedding models** — gemini-embedding-001 only
-8. **Python-level enforcement** — LLMs ignore numeric limits, enforce in code
+1. **One fix at a time** — change, test, verify, then move on
+2. **Provide test commands** — after every change, show how to verify
+3. **Do NOT modify `noise_filter.py`** unless patterns are explicitly specified
+4. **Do NOT modify `html_renderer.py`** unless explicitly asked
+5. **Do NOT modify `model/model.py`** — prompts are stable
+6. **Never mix embedding models** — gemini-embedding-001 only
+7. **Python-level enforcement** — LLMs ignore numeric limits, enforce in code

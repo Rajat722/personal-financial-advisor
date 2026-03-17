@@ -6,6 +6,7 @@ import json
 import logging
 import pytz
 import concurrent.futures
+from collections import defaultdict
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -109,23 +110,70 @@ def _format_earnings_context(earnings: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def format_article_blocks(articles: list) -> str:
-    """Format a list of article dicts into numbered text blocks for LLM prompts.
+def format_article_blocks(articles: list, user_portfolio: dict | None = None) -> str:
+    """Format article dicts into ticker-grouped text blocks for LLM prompts.
 
-    Includes publication date so the LLM can distinguish fresh vs. older articles
-    and avoid attributing stale facts to today's price movements.
+    Articles are grouped by their matched portfolio term (best_match) so the analyst
+    model sees all CRWD articles together, all AAPL articles together, etc. This
+    dramatically reduces cross-ticker contamination in Call 1 outputs.
+
+    Sectors and indices (broad terms) are grouped last so ticker-specific articles
+    appear at the top of the prompt where the model pays closest attention.
+    Includes publication date so the LLM can distinguish fresh vs. older articles.
     """
+    # Build reverse map: company name (lowercase) -> ticker symbol
+    company_to_ticker: dict[str, str] = {}
+    if user_portfolio:
+        for eq in user_portfolio.get("equities", []):
+            ticker = eq.get("ticker", "").upper()
+            company = eq.get("company", "")
+            if company and ticker:
+                company_to_ticker[company.lower()] = ticker
+
+    _TICKER_RE = re.compile(r'^[A-Z][A-Z0-9\-]{0,5}$')
+
+    def _normalize_match(best_match: str) -> str:
+        """Map company names back to ticker symbols where possible."""
+        if _TICKER_RE.match(best_match):
+            return best_match
+        return company_to_ticker.get(best_match.lower(), best_match)
+
+    def _is_ticker(term: str) -> bool:
+        return bool(_TICKER_RE.match(term))
+
+    # Group articles by normalized term, preserving similarity-score order within each group.
+    # Track seen doc_ids to prevent the same article appearing under multiple ticker groups.
+    grouped: dict[str, list] = defaultdict(list)
+    seen_ids: set[str] = set()
+    for article in articles:
+        doc_id = article.get("doc_id", "")
+        if doc_id and doc_id in seen_ids:
+            continue
+        if doc_id:
+            seen_ids.add(doc_id)
+        term = _normalize_match(article.get("best_match", "Unknown"))
+        grouped[term].append(article)
+
+    # Order groups: tickers first (sorted), then broad terms (sectors/indices)
+    ticker_groups = sorted(k for k in grouped if _is_ticker(k))
+    broad_groups = [k for k in grouped if not _is_ticker(k)]
+    ordered_groups = ticker_groups + broad_groups
+
     blocks = []
-    for i, article in enumerate(articles):
-        title = article['metadata'].get("title", f"Untitled Article {i+1}")
-        published = article['metadata'].get("published_iso", "unknown")
-        text = article['text']
-        blocks.append(
-            f"--- Article {i+1} ---\n"
-            f"Title: {title}\n"
-            f"Published: {published}\n"
-            f"Text: {text}\n"
-        )
+    article_num = 1
+    for term in ordered_groups:
+        blocks.append(f"\n=== {term} ===")
+        for article in grouped[term]:
+            title = article['metadata'].get("title", f"Untitled Article {article_num}")
+            published = article['metadata'].get("published_iso", "unknown")
+            text = article['text']
+            blocks.append(
+                f"--- Article {article_num} ---\n"
+                f"Title: {title}\n"
+                f"Published: {published}\n"
+                f"Text: {text}\n"
+            )
+            article_num += 1
     return "\n".join(blocks)
 
 
@@ -373,8 +421,8 @@ def _generate_user_digest(
     enriched_count = _enrich_articles_with_full_text(relevant_articles)
     logger.info(f"[{user_id}] Scraped {enriched_count}/{len(relevant_articles)} articles.")
 
-    # === Format article blocks ===
-    article_blocks = format_article_blocks(relevant_articles)
+    # === Format article blocks (grouped by ticker to prevent cross-ticker contamination) ===
+    article_blocks = format_article_blocks(relevant_articles, user_portfolio=user_portfolio)
     article_titles_urls = _build_article_titles_urls(relevant_articles)
 
     # === Filter shared data to this user's tickers ===

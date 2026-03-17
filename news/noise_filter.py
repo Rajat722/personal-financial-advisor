@@ -27,7 +27,7 @@ _PATTERNS = [
     # Passive voice with fund as object — real corporate news uses active voice.
     re.compile(
         r"\b(?:stock\s+)?(?:holdings?|position|stake)\b.{0,15}"
-        r"\b(?:lifted|raised|reduced|cut|boosted|trimmed|increased|decreased|lowered|sold|bought)\b",
+        r"\b(?:lifted|raised|reduced|cut|boosted|trimmed|increased|decreased|lowered|lessened|sold|bought)\b",
         re.IGNORECASE,
     ),
 
@@ -47,8 +47,8 @@ _PATTERNS = [
     # "4th Largest Position" / "2nd Largest Holding"
     re.compile(r"\b\d+(?:st|nd|rd|th)\s+largest\s+(?:position|holding)\b", re.IGNORECASE),
 
-    # "Short Interest Up 21.1%"
-    re.compile(r"\bshort\s+interest\b.+\d+%", re.IGNORECASE),
+    # "Short Interest Up 21.1%" / "Short Interest Update"
+    re.compile(r"\bshort\s+interest\b(?:\s+(?:update|down|up)\b|.+\d+%)", re.IGNORECASE),
 
     # "Shares Acquired by Aviso Financial" / "Shares Sold by [fund]"
     # Passive voice — distinguishes fund disclosures from "Berkshire Buys Shares".
@@ -57,10 +57,10 @@ _PATTERNS = [
     # "Invests $550,000 in Costco" — specific dollar amount required; real news uses % or context.
     re.compile(r"\binvests?\s+\$[\d,.]+", re.IGNORECASE),
 
-    # "Buys New Shares in Apple" / "Purchases Additional Shares in Tesla"
+    # "Buys New Shares in Apple" / "Purchases Additional Stake in Tesla"
     # "new" or "additional" qualifier signals institutional disclosure, not corporate action.
     re.compile(
-        r"\b(?:buys?|purchases?)\s+(?:new\s+|additional\s+)(?:\d+\s+)?shares?\s+in\b",
+        r"\b(?:buys?|purchases?)\s+(?:new\s+|additional\s+)(?:\d+\s+)?(?:shares?|stake|position)\s+in\b",
         re.IGNORECASE,
     ),
 
@@ -88,19 +88,20 @@ _PATTERNS = [
         re.IGNORECASE,
     ),
 
-    # "[Fund LLC] Makes New $2.20 Million Investment in Amazon" — anchored to fund entity
-    # indicators so "Microsoft Makes $2B Investment in OpenAI" is NOT blocked.
+    # "[Fund LLC] Makes New $2.20 Million Investment in Amazon" / "Makes New $686,000 Investment"
+    # Anchored to fund entity indicators so "Microsoft Makes $2B Investment in OpenAI" is NOT blocked.
+    # Allows both word-form ("$2.20 million") and raw numeric ("$686,000") dollar amounts.
     re.compile(
         r"\b(?:LLC|Ltd\.?|Ltda\.?|L\.P\.|LP|Co\.?|Corp\.?|Inc\.?|Pte\.?|GmbH|SA|AG|NV|BV|Pty\.?|management|capital|advisors?|wealth|asset|partners?|associates?|group|fund|trust|holdings?)\b"
-        r".{0,80}\bmakes?\s+(?:a?\s+)?(?:new\s+)?\$[\d,.]+\s+(?:million|billion|thousand)\s+investment\s+in\b",
+        r".{0,80}\bmakes?\s+(?:a?\s+)?(?:new\s+)?\$[\d,.]+\s*(?:million\s+|billion\s+|thousand\s+)?investment\s+in\b",
         re.IGNORECASE,
     ),
 
-    # "[Fund LLC] Acquires New Position in Cloudflare" — anchored to fund entity indicators
-    # so "Nvidia Acquires Stake in [company]" (real news) is NOT blocked.
+    # "[Fund LLC] Acquires New Position/Shares/Stake in Cloudflare" — anchored to fund entity
+    # indicators so "Nvidia Acquires Stake in [company]" (real news) is NOT blocked.
     re.compile(
         r"\b(?:LLC|Ltd\.?|Ltda\.?|L\.P\.|LP|Co\.?|Corp\.?|Inc\.?|Pte\.?|GmbH|SA|AG|NV|BV|Pty\.?|management|capital|advisors?|wealth|asset|partners?|associates?|group|fund|trust|holdings?)\b"
-        r".{0,80}\bacquires?\s+(?:a\s+)?(?:new\s+)?position\s+in\b",
+        r".{0,80}\bacquires?\s+(?:a\s+)?(?:new\s+)?(?:position|shares?|stake)\s+in\b",
         re.IGNORECASE,
     ),
 
@@ -139,6 +140,21 @@ _PATTERNS = [
         r".{0,150}\$\d{1,3},\d{3}(?:\.\d+)?(?![\d,])",
         re.IGNORECASE,
     ),
+
+    # "Shopify (SHOP) Receives Average Rating of 'Moderate Buy' from Analysts"
+    # "JPMorgan (JPM) Given Average Recommendation of 'Moderate Buy' from Brokerages"
+    # Templated analyst consensus articles with zero insight — just report rating averages.
+    re.compile(r"\b(?:receives?|given)\s+(?:average|consensus)\s+(?:rating|recommendation)\b", re.IGNORECASE),
+
+    # "Islamic Coin (ISLM) Reaches Self Reported Market Cap of $44.90 Million"
+    # "Self Reported Market Cap" is unique to crypto/micro-cap spam — no legitimate
+    # equity uses this phrasing (SEC filings use "market capitalization").
+    re.compile(r"\bself\s+reported\s+market\s+cap\b", re.IGNORECASE),
+
+    # "(G999) Trading Up 64.9% This Week" / "(KITE) Trading Down 12% Today"
+    # Crypto/micro-cap price movement spam. Anchored to parenthesized ticker +
+    # "Trading Up/Down" + digit to avoid catching real earnings/news.
+    re.compile(r"\([A-Z0-9]+\)\s+trading\s+(?:up|down)\s+\d", re.IGNORECASE),
 
     # Role-based insider sale articles below $1M — no "insider" keyword in title.
     # Matches: "Verizon (NYSE:VZ) SVP Sells $428,450.00 in Stock"
@@ -184,6 +200,15 @@ _ROUNDUP_PATTERNS = [
 
     # "12 Cheap AI Stocks to Buy in 2026" / "13 Most Profitable Growth Stocks to Buy Right Now"
     re.compile(r"\b\d+\s+\w.{0,30}\bstocks?\s+to\s+buy\b", re.IGNORECASE),
+
+    # "12 AI Stocks That Will Skyrocket" / "5 Stocks That Could Double"
+    # Variant of the numbered-list roundup that uses "that will/could/might" instead of "to [verb]".
+    re.compile(r"\b\d+\s+\w.{0,30}\bstocks?\s+that\s+(?:will|could|might|may)\b", re.IGNORECASE),
+
+    # "Head to Head Comparison: Axon Enterprise and Astronics"
+    # "Head-to-Head Comparison: Apple vs Microsoft"
+    # Templated comparison articles with no specific news content.
+    re.compile(r"\bhead[\s-]+to[\s-]+head\s+comparison\b", re.IGNORECASE),
 ]
 
 

@@ -18,7 +18,7 @@ SIMILARITY_THRESHOLD: float = settings.SIM_THRESHOLD
 
 # Maximum articles passed to the LLM — keeps prompt size manageable and digest readable.
 # Articles are sorted by similarity score descending; only the top N are used.
-MAX_RELEVANT_ARTICLES: int = 40
+MAX_RELEVANT_ARTICLES: int = 30
 
 # Penalty applied to similarity score for broad-term matches.
 # A broad-match article needs raw similarity of ~0.79+ to compete with
@@ -212,12 +212,12 @@ def build_user_allowed_terms(user_portfolio: dict) -> set[str]:
 
 # --- Retrieve relevant articles from the articles collection ---
 def find_relevant_articles_from_context(
-    max_age_hours: int = 36,
+    max_age_hours: int = 20,
     allowed_terms: set[str] | None = None,
 ) -> list:
     """Return all articles whose embeddings match the portfolio above the similarity threshold.
 
-    Only considers articles published within the last max_age_hours (default 36h).
+    Only considers articles published within the last max_age_hours (default 20h).
     Logs article title, best matching portfolio term, and similarity score for debugging.
     """
     article_collection = get_article_collection()

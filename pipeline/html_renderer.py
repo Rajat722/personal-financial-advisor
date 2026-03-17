@@ -385,18 +385,18 @@ def _parse_editorial(md: str) -> dict:
     # ── Key Market Insights ──────────────────────────────────────────────────
     key_insights: list[dict] = []
     insights_m = re.search(
-        r'Key Market Insights\s*\n((?:[ \t]*-[^\n]+\n?)+)',
+        r'\*{0,2}Key Market Insights\*{0,2}\s*\n((?:[ \t]*-[^\n]+\n?)+)',
         md, re.IGNORECASE,
     )
     if insights_m:
         for line in insights_m.group(1).splitlines():
-            m = re.match(r'\s*-\s*([A-Z0-9.\-]+):\s*(.+)', line.strip())
+            m = re.match(r'\s*-\s*\*{0,2}([A-Z0-9.\-]+)\*{0,2}:\s*(.+)', line.strip())
             if m:
                 key_insights.append({"ticker": m.group(1), "text": m.group(2).strip()})
 
     # ── Upcoming Earnings ────────────────────────────────────────────────────
     earnings_m = re.search(
-        r'Upcoming Earnings[^\n]*\n(.*?)(?=\nNews That Mattered|\Z)',
+        r'Upcoming Earnings[^\n]*\n(.*?)(?=\n\*{0,2}News That Mattered|\Z)',
         md, re.IGNORECASE | re.DOTALL,
     )
     earnings_text = (earnings_m.group(1).strip() if earnings_m
