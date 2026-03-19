@@ -12,7 +12,8 @@ class Settings(BaseSettings):
     NEWSDATA_FALLBACK_API_KEY: Optional[str] = None  # secondary account key; used when primary credits are exhausted
     GEMINI_API_KEY: str
     GEMINI_FALLBACK_API_KEY: Optional[str] = None    # secondary account key; used when primary credits are exhausted
-    MAILERSEND_API_KEY: Optional[str] = None  # required for email delivery; optional for pipeline-only use
+    GMAIL_USER: Optional[str] = None          # Gmail address used as sender
+    GMAIL_APP_PASSWORD: Optional[str] = None  # Gmail App Password (not your account password)
 
     # Fetching
     FETCH_LANGUAGE: str = "en"
@@ -40,7 +41,7 @@ class Settings(BaseSettings):
     # LLM
     GEMINI_EMBED_MODEL: str = "gemini-embedding-001"
     GEMINI_SUMMARY_MODEL: str = "gemini-2.5-flash-lite"  # kept for backward compat
-    GEMINI_EXTRACT_MODEL: str = "gemini-2.5-flash-lite"   # Call 1: factual extraction (fast, cheap)
+    GEMINI_EXTRACT_MODEL: str = "gemini-2.5-flash-lite"   # Call 1: factual extraction (flash-lite's granular style suits extraction better)
     GEMINI_EDITORIAL_MODEL: str = "gemini-2.5-flash"      # Call 2: newsletter writing (higher quality)
     LLM_TEMPERATURE: float = 0.0
     LLM_MAX_TOKENS: int = 512

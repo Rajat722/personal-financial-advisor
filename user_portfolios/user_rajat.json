@@ -1,7 +1,7 @@
 {
     "user_id": "rajat",
     "name": "Rajat",
-    "email": "rajat@example.com",
+    "email": "rajatgaur72@gmail.com",
     "delivery_time": "19:00",
     "total_investment": 100000,
     "equities": [
@@ -41,7 +41,7 @@
             "sector": "social media",           "asset_class": "equity", "news_tier": 1
         },
         {
-            "ticker": "BRK-A", "company": "Berkshire Hathaway",
+            "ticker": "BRK-B", "company": "Berkshire Hathaway",
             "allocation": 4200, "shares": 0.006, "avg_cost_basis": 618000.00,
             "sector": "financial services",     "asset_class": "equity", "news_tier": 2
         },

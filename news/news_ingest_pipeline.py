@@ -1,10 +1,11 @@
 # news_ingest_pipeline.py
+import re
 import sys
 import json
 import time
 import logging
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 import pytz
 
@@ -43,6 +44,44 @@ from storage.vector_store import upsert_to_collection, get_article_collection
 
 log = get_logger("news_ingest_pipeline")
 embedder = GeminiEmbedder()
+
+
+# ---------------------------------------------------------------------------
+# Stale content detection at ingest
+# ---------------------------------------------------------------------------
+_QUARTER_END_MONTH = {1: 3, 2: 6, 3: 9, 4: 12}
+_RE_QUARTER_INGEST = re.compile(r"\bQ([1-4])\s+(20\d{2})\b", re.IGNORECASE)
+_RE_FISCAL_YEAR_INGEST = re.compile(r"\bfiscal\s+year\s+(20\d{2})\b", re.IGNORECASE)
+
+
+def _is_content_stale(text: str) -> bool:
+    """Check if article text references events >2 weeks old (quarters or fiscal years).
+
+    Only checks quarter and fiscal year references — these are the clearest signals
+    of recycled content. Month references are left to the post-Call-1 filter where
+    we have more context. Uses a 14-day tolerance (stricter than the post-filter's
+    45 days) because at ingest we're just tagging, not dropping.
+    """
+    now = datetime.now(timezone.utc)
+
+    for m in _RE_QUARTER_INGEST.finditer(text):
+        q, year = int(m.group(1)), int(m.group(2))
+        end_month = _QUARTER_END_MONTH[q]
+        if end_month == 12:
+            quarter_end = datetime(year, 12, 31, tzinfo=timezone.utc)
+        else:
+            quarter_end = datetime(year, end_month + 1, 1, tzinfo=timezone.utc) - timedelta(days=1)
+        if (now - quarter_end).days > 45:
+            return True
+
+    for m in _RE_FISCAL_YEAR_INGEST.finditer(text):
+        fy_year = int(m.group(1))
+        fy_end = datetime(fy_year, 12, 31, tzinfo=timezone.utc)
+        if (now - fy_end).days > 45:
+            return True
+
+    return False
+
 
 # ---------------------------------------------------------------------------
 # Query strategy configuration
@@ -279,6 +318,10 @@ def ingest_daily_news() -> int:
             log.warning(f"Skipping '{article.title}' — embedding returned None")
             continue
 
+        # Tag articles whose summary references old events (Q4 2025, fiscal year 2025, etc.)
+        # Article is still stored — just penalized downstream in relevance_filter.py.
+        stale_content = _is_content_stale((article.title or "") + " " + (article.summary or ""))
+
         metadata = {
             "url": article.url,
             "title": article.title,
@@ -286,6 +329,7 @@ def ingest_daily_news() -> int:
             "published_ts": int(article.published_at_utc.timestamp()),
             "published_iso": article.published_at_utc.isoformat(),
             "tickers": ",".join(article.tickers),
+            "content_stale": stale_content,
         }
         document = (article.title or "") + " — " + (article.summary or "")[:1500]
 

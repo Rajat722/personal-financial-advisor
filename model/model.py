@@ -56,9 +56,14 @@ def _generate(contents: str, model: str | None = None) -> str:
         raise RuntimeError("Both Gemini API keys have exhausted their quota.") from e
 
 def build_insight_prompt(article_blocks: str, time_series_json: str) -> str:
-    """Build a Gemini prompt correlating news articles with intraday price movements."""
+    """Build a Gemini prompt extracting actionable facts from news articles for portfolio holdings."""
+    from datetime import datetime
+    import pytz
+    today_str = datetime.now(pytz.timezone("US/Eastern")).strftime("%B %d, %Y")
     return f"""
-You are a financial analyst correlating news events with intraday stock price movements.
+You are a financial analyst extracting actionable facts from news articles for a portfolio of stocks. You are given today's price summary (open, close, change %) and news articles grouped by ticker.
+
+Today's date: {today_str}
 
 STRICT RULES — you must follow these exactly:
 - Only reference tickers that are explicitly named in the news articles provided.
@@ -70,7 +75,10 @@ STRICT RULES — you must follow these exactly:
 - QUALITY THRESHOLD: Only generate an insight if it contains a CONCRETE, SPECIFIC fact useful to an investor — earnings or revenue numbers, an analyst rating or price target change, a product launch, M&A activity, or a management change. DO NOT generate insights where the ticker is merely mentioned in passing, listed in a group of companies, named as an ETF holding, or cited as a general example. If an article about Company A lists Company B in a sidebar or comparison table, do not generate an insight for Company B. Quality over quantity — fewer precise insights is better than many vague ones.
 - PRICE-ONLY ARTICLES: Articles whose entire content is the price movement itself ("Company X Trading 1.3% Higher — Time to Buy?", "Shares Down 1.7% — Here's What Happened", "Stock Price Down X% After Insider Selling") are price alerts, not news. Do NOT generate an insight whose "insight" field merely restates the price movement. The insight must cite a specific NEWS-DRIVEN cause — an earnings number, analyst action, product announcement, or corporate event. If the only available article for a ticker is a price alert with no underlying cause, omit that ticker entirely.
 - TEMPORAL AWARENESS: Each article includes a "Published:" date. When correlating articles with today's price data, strongly prefer articles published within the last 24 hours. If an article is older than 2 days, note the publish date in the "support" field and mark the insight as potentially stale. Do NOT attribute price movements today to articles published 3+ days ago — the market has already priced in that information.
-- DRIVER ORDERING: For each ticker, list your insights in order of recency — the most recently published event FIRST. This is critical because the first insight per ticker is used to explain today's price movement. If today's news for a ticker is an analyst upgrade, that insight must appear BEFORE last quarter's earnings data. Historical earnings (published weeks ago) must be listed last.
+- DRIVER ORDERING: For each ticker, output the most important and most recent insight FIRST. This is critical because the first insight per ticker is used as the headline driver for today's price movement. Rank by: breaking news today > earnings/revenue numbers > analyst upgrades/downgrades > product launches > general commentary. Historical earnings (published weeks ago) must be listed last.
+- CONSOLIDATION: If multiple articles report the same fact for a ticker (e.g., the same earnings number, the same CEO quote), produce ONE insight with the most complete version. Do not repeat the same fact from different sources.
+- ANALYST RATINGS: If an article lists multiple analyst ratings or price targets for one ticker, consolidate into ONE insight summarizing the range and consensus (e.g., "Multiple analysts raised NVDA price targets to $235-$300; consensus is bullish with most firms rating Buy or Outperform"). Do NOT create a separate insight for each individual analyst.
+- PER-TICKER CAP: Maximum 3 insights per ticker. Keep the 3 most material: earnings/revenue data > analyst consensus > product/M&A news > general commentary. If a ticker has only low-value information (passing mentions, ETF holdings), emit 0 insights for it.
 
 Return a JSON object:
 {{
@@ -85,7 +93,7 @@ Return a JSON object:
   ]
 }}
 
-Time series data:
+Today's price summary:
 \"\"\"
 {time_series_json}
 \"\"\"

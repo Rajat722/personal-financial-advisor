@@ -18,11 +18,19 @@ The core pipeline is **fully functional**: shared ingestion → per-user article
 - [x] Per-user output directories (`logs/digests/{user_id}/`, `logs/digests/html/{user_id}/`)
 
 **Priorities (in order):**
-1. **Scheduled ingestion** — 3x/day (7:00 AM, 12:30 PM, 5:30 PM ET) to build article volume. Digest quality bottleneck is article count, not pipeline logic.
-2. **Weekday validation** — Run full pipeline on active market day, compare against March 13 benchmark (18/20 drivers, 15 Key Insights).
-3. **MailerSend email delivery** — Wire up HTML email sending.
-4. **RKLB-type hallucination guard** — Title keyword guard in `relevance_filter.py` to prevent semantic-similarity false matches (e.g., Nebius article matching "Nvidia" at 0.763 and getting attributed to RKLB).
-5. **FastAPI layer** — POST /users/signup, GET /users/{id}/newsletter, POST /newsletter/send.
+1. **Staleness elimination** — Human-readable article ages, temporal marker scan on insights, stale-content tagging at ingest. See `claude_next_steps.md` for execution plan.
+2. **Secondary news source** — Add a second API (Finnhub/Marketaux TBD) for better mid/small-cap coverage.
+3. **RKLB-type hallucination guard** — Title keyword guard in `relevance_filter.py` to prevent semantic-similarity false matches.
+4. **FastAPI layer** — POST /users/signup, GET /users/{id}/newsletter, POST /newsletter/send.
+
+**Completed:**
+- [x] Scheduled ingestion — 3x/day via Windows Task Scheduler
+- [x] Gmail SMTP email delivery (commented out for test runs)
+- [x] Tiered time windows (tier-1=24h, tier-2=36h, tier-3=48h)
+- [x] Source penalty system (fool.com, zacks.com, etc.)
+- [x] Noise filter expansion (7 new patterns as of March 18)
+- [x] Compact price summary for Call 1 (96% token reduction)
+- [x] Per-ticker insight cap (Python enforcement)
 
 ---
 
@@ -46,7 +54,7 @@ AI-powered personalized finance newsletter: fetches news → filters by relevanc
 | Stock Data | yfinance (`period=5d`) | ✅ |
 | HTML Renderer | `pipeline/html_renderer.py` | ✅ |
 | Multi-user | `user_portfolios/user_*.json` | ✅ |
-| Email | MailerSend | 🔲 Next |
+| Email | Gmail SMTP (App Password) | ✅ (disabled for test runs) |
 
 ---
 
@@ -81,9 +89,9 @@ News Ingestion (separate step, runs 1-3x daily):
 |------|---------|
 | `pipeline/run_test_pipeline.py` | Main orchestration — shared steps + per-user loop |
 | `model/model.py` | LLM prompts — Call 1 (analyst) + Call 2 (editorial) |
-| `model/relevance_filter.py` | Article filtering — 20h window, similarity threshold 0.75, broad-match penalty, dedup, per-user `allowed_terms` |
+| `model/relevance_filter.py` | Article filtering — tiered time windows (24/36/48h), similarity threshold 0.75, broad-match + source penalties, dedup, per-user `allowed_terms` |
 | `pipeline/html_renderer.py` | Markdown → HTML email with styled template |
-| `news/noise_filter.py` | Regex patterns: institutional, speculative, price-alert, roundup |
+| `news/noise_filter.py` | Regex patterns: institutional, speculative, price-alert, roundup (17+ patterns as of March 18) |
 | `news/news_ingest_pipeline.py` | Fetch + filter + embed + store articles |
 | `core/users.py` | Multi-user loader: `load_all_users()`, `build_master_portfolio()` |
 | `pipeline/shared_data.py` | Shared stock data + earnings fetch |
@@ -114,8 +122,9 @@ rm -rf chroma_store/
 - **LLM Prompts:** STRICT RULES anti-hallucination block in every prompt
 - **Error handling:** try/except on all API calls, `@gemini_retry()`, `_parse_insights_safe()` with regex fallback
 - **Python enforcement:** Hard caps on Key Insights (15) and News (8) via `_cap_key_insights()`
-- **Data freshness:** 20h time window, 7-day cleanup, publication dates in article blocks
-- **Article cap:** 30 articles max per user (sorted by similarity score descending)
+- **Data freshness:** Tiered time windows (tier-1=24h, tier-2=36h, tier-3=48h), 7-day cleanup, publication dates in article blocks
+- **Article cap:** 40 articles max per user (sorted by similarity score descending)
+- **Source penalty:** 0.03 penalty for low-signal sources (fool.com, zacks.com, investorplace.com, 247wallst.com, insidermonkey.com)
 - **Article text:** Capped at 1500 chars per article (`body[:1500]`)
 
 ---
@@ -126,6 +135,6 @@ rm -rf chroma_store/
 2. **Provide test commands** — after every change, show how to verify
 3. **Do NOT modify `noise_filter.py`** unless patterns are explicitly specified
 4. **Do NOT modify `html_renderer.py`** unless explicitly asked
-5. **Do NOT modify `model/model.py`** — prompts are stable
+5. **Do NOT modify `model/model.py`** — prompts are stable (unless adding temporal/freshness rules)
 6. **Never mix embedding models** — gemini-embedding-001 only
 7. **Python-level enforcement** — LLMs ignore numeric limits, enforce in code

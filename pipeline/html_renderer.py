@@ -292,8 +292,8 @@ def _divider(icon: str) -> str:
 # ── Parsers ───────────────────────────────────────────────────────────────────
 
 def _is_positive(val: str) -> bool:
-    """Return True if the value string starts with '+' or has no sign (positive)."""
-    s = val.strip()
+    """Return True if the value string is positive (no '-' sign)."""
+    s = val.strip().lstrip("$")
     return not s.startswith("-")
 
 
@@ -459,6 +459,7 @@ def render_digest_html(
     date_str: str,
     article_count: int,
     holdings_count: int,
+    user_name: str = "",
 ) -> str:
     """Return a complete Portfolio Pulse HTML email string.
 
@@ -540,8 +541,9 @@ def render_digest_html(
         )
     news_html = "\n\n".join(news_parts)
 
+    greeting_name = f", {user_name}" if user_name else ""
     intro_text = html.escape(
-        f"Good Evening! Here's your personalized portfolio digest for {date_str} — "
+        f"Good Evening{greeting_name}! Here's your personalized portfolio digest for {date_str} — "
         f"curated from {article_count} relevant articles across your {holdings_count} holdings."
     )
 

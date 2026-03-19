@@ -18,13 +18,33 @@ SIMILARITY_THRESHOLD: float = settings.SIM_THRESHOLD
 
 # Maximum articles passed to the LLM — keeps prompt size manageable and digest readable.
 # Articles are sorted by similarity score descending; only the top N are used.
-MAX_RELEVANT_ARTICLES: int = 30
+# Increased from 30 to 40 after tiered time windows (48h max) expanded the candidate pool.
+MAX_RELEVANT_ARTICLES: int = 40
 
 # Penalty applied to similarity score for broad-term matches.
 # A broad-match article needs raw similarity of ~0.79+ to compete with
 # a ticker-specific article at 0.75. Tuned to let major market events
 # through (crash articles score 0.85+) while filtering generic commentary.
 BROAD_MATCH_PENALTY: float = 0.04
+
+# Penalty applied to articles from low-signal SEO-heavy sources.
+# These sites frequently recycle old earnings data, publish templated
+# comparison articles, and produce high-volume opinion pieces.
+# A penalized article needs raw similarity of ~0.78+ to compete.
+# Genuine breaking news from these sources still passes (scores 0.85+).
+SOURCE_PENALTY: float = 0.03
+_LOW_SIGNAL_SOURCES: set[str] = {
+    "fool.com",           # Motley Fool — heavy on "Is X a Buy?" recycled content
+    "zacks.com",          # Zacks — templated performance comparisons, recycled earnings
+    "investorplace.com",  # InvestorPlace — SEO listicles, opinion pieces
+    "247wallst.com",      # 24/7 Wall St — "best stocks" listicles
+    "insidermonkey.com",  # Insider Monkey — hedge fund holding roundups
+}
+
+# Penalty for articles tagged as containing stale content at ingest time.
+# These articles have recent publication dates but reference old events
+# (e.g., Q4 2025 earnings discussed in a March 2026 article).
+STALE_CONTENT_PENALTY: float = 0.03
 
 # ETF company names are hardcoded — they rarely change and aren't distinguishable
 # from stocks in portfolio.json. Sectors and indices are loaded dynamically.
@@ -212,18 +232,23 @@ def build_user_allowed_terms(user_portfolio: dict) -> set[str]:
 
 # --- Retrieve relevant articles from the articles collection ---
 def find_relevant_articles_from_context(
-    max_age_hours: int = 20,
+    max_age_hours: int = 48,
     allowed_terms: set[str] | None = None,
+    tier_windows: dict[str, int] | None = None,
+    max_articles: int | None = None,
 ) -> list:
     """Return all articles whose embeddings match the portfolio above the similarity threshold.
 
-    Only considers articles published within the last max_age_hours (default 20h).
+    Only considers articles published within the last max_age_hours.
+    When tier_windows is provided, each article is further filtered by its matched
+    ticker's tier-specific time window (e.g. tier-1=20h, tier-2=36h, tier-3=48h).
     Logs article title, best matching portfolio term, and similarity score for debugging.
     """
     article_collection = get_article_collection()
 
-    # Time-window: only consider articles published within max_age_hours.
-    # Every article has published_ts (int Unix timestamp) in metadata.
+    # Time-window: fetch the widest window from ChromaDB, then apply per-ticker
+    # tier windows after matching. This lets tier-3 articles from 40h ago through
+    # while keeping tier-1 articles fresh.
     cutoff_ts = int((datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).timestamp())
     all_articles = article_collection.get(
         where={"published_ts": {"$gte": cutoff_ts}},
@@ -297,14 +322,46 @@ def find_relevant_articles_from_context(
             is_broad = best_match.lower() in _BROAD_MATCH_TERMS
             effective_similarity = best_similarity - BROAD_MATCH_PENALTY if is_broad else best_similarity
 
+            # Penalize low-signal sources (Motley Fool, Zacks, etc.)
+            source_domain = metadata.get("source", "")
+            is_low_signal = any(s in source_domain for s in _LOW_SIGNAL_SOURCES)
+            if is_low_signal:
+                effective_similarity -= SOURCE_PENALTY
+
+            # Penalize articles tagged as containing stale content at ingest
+            is_stale_content = metadata.get("content_stale", False)
+            if is_stale_content:
+                effective_similarity -= STALE_CONTENT_PENALTY
+
+            penalties = []
+            if is_broad:
+                penalties.append(f"broad:-{BROAD_MATCH_PENALTY}")
+            if is_low_signal:
+                penalties.append(f"source:-{SOURCE_PENALTY}")
+            if is_stale_content:
+                penalties.append(f"stale:-{STALE_CONTENT_PENALTY}")
+            penalty_str = f" ({', '.join(penalties)})" if penalties else ""
+
             log.info(
                 f"[{'PASS' if effective_similarity >= SIMILARITY_THRESHOLD else 'FAIL'}] "
-                f"similarity={best_similarity:.3f}{' (broad:-' + str(BROAD_MATCH_PENALTY) + ')' if is_broad else ''} "
+                f"similarity={best_similarity:.3f}{penalty_str} "
                 f"match='{best_match}' | {title[:70]}"
             )
 
             # ChromaDB returns cosine distances (0=identical). Convert to similarity.
             if effective_similarity >= SIMILARITY_THRESHOLD:
+                # Tier-based time filtering: each ticker tier has its own freshness window.
+                # Tier-1 (mega-cap) = 20h, tier-2 (mid-cap) = 36h, tier-3 (defensive) = 48h.
+                if tier_windows:
+                    term_max_hours = tier_windows.get(best_match.lower(), max_age_hours)
+                    term_cutoff = int((datetime.now(timezone.utc) - timedelta(hours=term_max_hours)).timestamp())
+                    pub_ts = metadata.get("published_ts", 0)
+                    if pub_ts < term_cutoff:
+                        log.info(
+                            f"[STALE] match='{best_match}' window={term_max_hours}h | {title[:70]}"
+                        )
+                        continue
+
                 relevant_articles.append({
                     "doc_id": doc_id,
                     "text": text,
@@ -316,12 +373,13 @@ def find_relevant_articles_from_context(
         except Exception as e:
             log.warning(f"Skipping {doc_id} due to error: {e}")
 
-    # Sort by relevance score descending; cap at MAX_RELEVANT_ARTICLES.
+    # Sort by relevance score descending; cap at max_articles (or default).
     # This keeps the LLM prompt size manageable and the digest readable.
+    cap = max_articles if max_articles is not None else MAX_RELEVANT_ARTICLES
     relevant_articles.sort(key=lambda a: a["best_similarity"], reverse=True)
-    if len(relevant_articles) > MAX_RELEVANT_ARTICLES:
-        log.info(f"Capping to top {MAX_RELEVANT_ARTICLES} articles (dropped {len(relevant_articles) - MAX_RELEVANT_ARTICLES} lower-scored).")
-        relevant_articles = relevant_articles[:MAX_RELEVANT_ARTICLES]
+    if len(relevant_articles) > cap:
+        log.info(f"Capping to top {cap} articles (dropped {len(relevant_articles) - cap} lower-scored).")
+        relevant_articles = relevant_articles[:cap]
 
     relevant_articles = _dedupe_by_title_similarity(relevant_articles)
 

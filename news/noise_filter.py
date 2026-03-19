@@ -80,6 +80,26 @@ _PATTERNS = [
         re.IGNORECASE,
     ),
 
+    # "Danske Bank A S Acquires New Shares in Procter & Gamble Company (The) $PG"
+    # "Danske Bank A S Acquires New Position in AT&T Inc. $T"
+    # The "New" qualifier is the key — real M&A says "Acquires Stake" or "Acquires [Company]",
+    # never "Acquires New Shares/Position in". This is purely SEC 13F disclosure phrasing.
+    # No fund-entity anchor needed — the language itself is unambiguous.
+    re.compile(
+        r"\bacquires?\s+(?:a\s+)?new\s+(?:\d[\d,]*\s+)?(?:shares?|position|stake)\s+in\b",
+        re.IGNORECASE,
+    ),
+
+    # "CIBC Bancorp USA Inc. Makes New Investment in AT&T Inc. $T"
+    # "Danske Bank A S Makes New Investment in Meta Platforms, Inc. $META"
+    # "Makes New Investment in" + $TICKER suffix at end of title. Real investment news
+    # ("Microsoft Makes Investment in OpenAI") never ends with "$MSFT". The $TICKER
+    # suffix is unique to SEC filing spam generators.
+    re.compile(
+        r"\bmakes?\s+(?:a\s+)?new\s+(?:\$[\d,.]+\s*(?:million\s+|billion\s+|thousand\s+)?)?investment\s+in\b.+\$[A-Z]",
+        re.IGNORECASE,
+    ),
+
     # "[Fund LLC] Takes Position in JPMorgan" — anchored to fund entity indicators so
     # "Microsoft Takes Position in OpenAI" (real news, no fund keyword) is NOT blocked.
     re.compile(
@@ -187,7 +207,8 @@ def is_noise_article(title: str) -> bool:
 _ROUNDUP_PATTERNS = [
     # "Best Tech Stocks To Watch Today" / "Promising Energy Stocks To Follow Now"
     # "Top Space Stocks To Research – March 5th" / "Casino Stocks To Consider"
-    re.compile(r"\bstocks?\s+to\s+(?:watch|follow|research|consider|buy|avoid)\b", re.IGNORECASE),
+    # "13 Best FAANG+ Stocks to Invest in Right Now" / "Best AI Stocks to Own"
+    re.compile(r"\bstocks?\s+to\s+(?:watch|follow|research|consider|buy|avoid|own|invest)\b", re.IGNORECASE),
 
     # "Stocks To Keep An Eye On"
     re.compile(r"\bstocks?\s+to\s+keep\s+an\s+eye\s+on\b", re.IGNORECASE),
@@ -199,7 +220,8 @@ _ROUNDUP_PATTERNS = [
     re.compile(r"\bstocks?\s+to\s+add\s+to\b", re.IGNORECASE),
 
     # "12 Cheap AI Stocks to Buy in 2026" / "13 Most Profitable Growth Stocks to Buy Right Now"
-    re.compile(r"\b\d+\s+\w.{0,30}\bstocks?\s+to\s+buy\b", re.IGNORECASE),
+    # "4 ETFs Yielding Over 12% That Are Actually Worth Buying"
+    re.compile(r"\b\d+\s+\w.{0,30}\b(?:stocks?|etfs?)\s+to\s+(?:buy|own|invest)\b", re.IGNORECASE),
 
     # "12 AI Stocks That Will Skyrocket" / "5 Stocks That Could Double"
     # Variant of the numbered-list roundup that uses "that will/could/might" instead of "to [verb]".
@@ -209,6 +231,32 @@ _ROUNDUP_PATTERNS = [
     # "Head-to-Head Comparison: Apple vs Microsoft"
     # Templated comparison articles with no specific news content.
     re.compile(r"\bhead[\s-]+to[\s-]+head\s+comparison\b", re.IGNORECASE),
+
+    # "Weekly Research Analysts' Ratings Changes for NVIDIA (NVDA)"
+    # "Analyst Ratings Changes for Apple (AAPL)"
+    # Templated articles listing 10-20+ individual analyst rating/PT changes.
+    # These flood Call 1 with one insight per analyst. Individual analyst articles
+    # (e.g., "Morgan Stanley Raises NVDA Price Target") still pass through.
+    re.compile(r"\b(?:weekly\s+)?(?:research\s+)?analysts?['\u2019]?\s*ratings?\s+changes?\s+for\b", re.IGNORECASE),
+
+    # "4 ETFs Yielding Over 12% That Are Actually Worth Buying"
+    # "This Stock Is Worth Buying Right Now"
+    # Always opinion/recommendation phrasing — real news doesn't use "worth buying".
+    re.compile(r"\bworth\s+buying\b", re.IGNORECASE),
+
+    # "T-Mobile vs. Verizon: Which Big Phone Carrier Is Best for You?"
+    # "Which Stock Is Best for Your Portfolio?"
+    # Consumer comparison articles — real competitive news uses "X vs Y in AI Race", not "best for you".
+    re.compile(r"\bwhich\b.{1,40}\bbest\s+for\s+(?:you|your)\b", re.IGNORECASE),
+
+    # "3 AI Software Stocks I'd Buy Today if I Were Starting From Scratch"
+    # Personal recommendation listicles — real news uses third person, not "I'd buy".
+    re.compile(r"\bI['\u2019]d\s+buy\b|\bI\s+would\s+buy\b", re.IGNORECASE),
+
+    # "How Is Axon Enterprise's Stock Performance Compared to Other Industrial Stocks?"
+    # Templated Zacks articles recycling old earnings data into performance comparisons.
+    # Real news doesn't use "stock performance compared to" phrasing.
+    re.compile(r"\bstock\s+performance\s+compared\s+to\b", re.IGNORECASE),
 ]
 
 
@@ -265,6 +313,16 @@ _SPECULATIVE_PATTERNS = [
     # Only matches when "Prediction:" is the FIRST word — real analyst notes lead with
     # the institution name ("Morgan Stanley Predicts...", "BofA Raises Target...").
     re.compile(r"^prediction\s*:", re.IGNORECASE),
+
+    # "Is Nvidia Stock a Buy?" / "Is AAPL a Sell?" / "Is Tesla a Hold?"
+    # Generic buy/sell/hold opinion questions — no news content.
+    # Question-mark anchor prevents matching analyst statements like
+    # "Morgan Stanley Says NVDA Is a Buy" (no trailing ?).
+    re.compile(r"\bis\s+.{1,40}\ba\s+(?:buy|sell|hold)\s*\?", re.IGNORECASE),
+
+    # "Is It Too Late to Buy Costco?" / "Is It Too Late to Invest in Nvidia?"
+    # Timing-opinion hooks — always opinion, never news.
+    re.compile(r"\btoo\s+late\s+to\s+(?:buy|invest|get\s+in)\b", re.IGNORECASE),
 ]
 
 
@@ -303,8 +361,8 @@ def is_speculative_article(title: str) -> bool:
 
     False positive guard: checked against known good articles —
     'Apple Just Unveiled the iPhone 17e. Should You Buy, Sell, or Hold AAPL Stock Now?' does NOT match
-    because it lacks the speculative question patterns above.
+    because it lacks the speculative question patterns above (no trailing '?' after 'a buy/sell/hold').
     'Nvidia Stock Reaches All-Time High' does NOT match 'can .* reach' because it lacks 'can'.
-    'Is Amazon Stock a Long-Term Buy?' does NOT match 'is .* going to $' because it lacks 'going to $'.
+    'Is Amazon Stock a Long-Term Buy?' NOW matches 'is .* a buy?' — intentional, it's opinion not news.
     """
     return any(p.search(title) for p in _SPECULATIVE_PATTERNS)
